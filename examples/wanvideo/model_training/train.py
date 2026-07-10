@@ -1,9 +1,35 @@
-import torch, os, argparse, accelerate, warnings
+import torch, os, argparse, accelerate, warnings, json
 from diffsynth.core import UnifiedDataset
-from diffsynth.core.data.operators import LoadVideo, LoadAudio, ImageCropAndResize, ToAbsolutePath
+from diffsynth.core.data.operators import LoadVideo, LoadAudio, LoadImage, ImageCropAndResize, ToAbsolutePath
 from diffsynth.pipelines.wan_video import WanVideoPipeline, ModelConfig
 from diffsynth.diffusion import *
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+class LoadStoryMemMemoryImages:
+    def __init__(self, base_path, height=None, width=None, max_pixels=1920 * 1080):
+        self.image_operator = (
+            ToAbsolutePath(base_path)
+            >> LoadImage()
+            >> ImageCropAndResize(height, width, max_pixels, 16, 16)
+        )
+
+    def _parse_paths(self, data):
+        if isinstance(data, str):
+            paths = json.loads(data)
+        elif isinstance(data, list):
+            paths = data
+        else:
+            raise ValueError("metadata field 'memory_images' must be a non-empty JSON list string or list of image paths.")
+        if not isinstance(paths, list) or len(paths) == 0:
+            raise ValueError("metadata field 'memory_images' must contain at least one image path.")
+        if not all(isinstance(path, str) and path.strip() for path in paths):
+            raise ValueError("metadata field 'memory_images' must contain only non-empty string paths.")
+        return paths
+
+    def __call__(self, data):
+        return [self.image_operator(path.strip()) for path in self._parse_paths(data)]
+
 
 
 class WanTrainingModule(DiffusionTrainingModule):
@@ -133,11 +159,15 @@ if __name__ == "__main__":
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         kwargs_handlers=[accelerate.DistributedDataParallelKwargs(find_unused_parameters=args.find_unused_parameters)],
     )
+    data_file_keys = [key for key in args.data_file_keys.split(",") if key]
+    extra_inputs = [] if args.extra_inputs is None else [key for key in args.extra_inputs.split(",") if key]
+    if "memory_images" in extra_inputs and "memory_images" not in data_file_keys:
+        raise ValueError("Using --extra_inputs memory_images requires --data_file_keys to include memory_images.")
     dataset = UnifiedDataset(
         base_path=args.dataset_base_path,
         metadata_path=args.dataset_metadata_path,
         repeat=args.dataset_repeat,
-        data_file_keys=args.data_file_keys.split(","),
+        data_file_keys=data_file_keys,
         main_data_operator=UnifiedDataset.default_video_operator(
             base_path=args.dataset_base_path,
             max_pixels=args.max_pixels,
@@ -152,6 +182,7 @@ if __name__ == "__main__":
         special_operator_map={
             "animate_face_video": ToAbsolutePath(args.dataset_base_path) >> LoadVideo(args.num_frames, 4, 1, frame_processor=ImageCropAndResize(512, 512, None, 16, 16)),
             "input_audio": ToAbsolutePath(args.dataset_base_path) >> LoadAudio(sr=16000),
+            "memory_images": LoadStoryMemMemoryImages(args.dataset_base_path, args.height, args.width, args.max_pixels),  # memory_images metadata -> list[PIL.Image] for StoryMem pipeline unit.
             "wantodance_music_path": ToAbsolutePath(args.dataset_base_path),
         }
     )

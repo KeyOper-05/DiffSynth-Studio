@@ -28,6 +28,8 @@ from ..models.wan_video_mot import MotWanModel
 from ..models.wav2vec import WanS2VAudioEncoder
 from ..models.longcat_video_dit import LongCatVideoTransformer3DModel
 
+MEMORY_ROPE_SHIFT = 5  # StoryMem uses a temporal RoPE spacing of 5 between memory frames; type: int.
+
 
 class WanVideoPipeline(BasePipeline):
 
@@ -59,6 +61,7 @@ class WanVideoPipeline(BasePipeline):
             WanVideoUnit_S2V(),
             WanVideoUnit_InputVideoEmbedder(),
             WanVideoUnit_ImageEmbedderVAE(),
+            WanVideoUnit_StoryMemMemoryEmbedder(),  # PipelineUnit.__call__ later invokes process(...); injects StoryMem memory latents before CLIP/control units.
             WanVideoUnit_ImageEmbedderCLIP(),
             WanVideoUnit_ImageEmbedderFused(),
             WanVideoUnit_FunControl(),
@@ -506,6 +509,117 @@ class WanVideoUnit_ImageEmbedderVAE(PipelineUnit):
         y = y.unsqueeze(0)
         y = y.to(dtype=pipe.torch_dtype, device=pipe.device)
         return {"y": y}
+
+
+class WanVideoUnit_StoryMemMemoryEmbedder(PipelineUnit):
+    def __init__(self):
+        super().__init__(
+            input_params=(
+                "memory_images", "noise", "latents", "input_latents", "y",
+                "input_image", "end_image", "num_frames", "height", "width",
+                "tiled", "tile_size", "tile_stride",
+            ),
+            output_params=("noise", "latents", "input_latents", "y", "memory_size"),
+            onload_model_names=("vae",)
+        )
+
+    def _encode_memory_images(self, pipe, memory_images, height, width, tiled, tile_size, tile_stride):  # Signature: -> torch.Tensor[B=1, C=16, M, H/8, W/8].
+        encoded = []  # Accumulates one latent tensor per memory image; each tensor shape is [1, C, H/8, W/8] after indexing time 0.
+        for image in memory_images:  # Iterate over PIL.Image memory frames in StoryMem order.
+            image = pipe.preprocess_image(image.resize((width, height))).to(pipe.device)  # PIL.Image.resize((W,H)) then preprocess_image(...) -> [1,3,H,W], move to pipe.device.
+            image = image.transpose(0, 1)  # torch.Tensor.transpose(dim0, dim1): [1,3,H,W] -> [3,1,H,W], the VAE video layout without batch.
+            latent = pipe.vae.encode(  # WanVideoVAE.encode(videos, device, tiled, tile_size, tile_stride) returns [B,C,T,H/8,W/8].
+                [image.to(dtype=pipe.torch_dtype, device=pipe.device)],  # List containing one [3,1,H,W] video; dtype/device match the pipeline.
+                device=pipe.device,  # Device where VAE forward runs.
+                tiled=tiled,  # Whether to use tiled VAE encoding for lower memory.
+                tile_size=tile_size,  # Spatial tile size consumed by tiled_encode when tiled=True.
+                tile_stride=tile_stride,  # Spatial tile stride consumed by tiled_encode when tiled=True.
+            )  # End VAE encode call.
+            encoded.append(latent[:, :, 0])  # Keep first/only latent frame: [1,C,1,H,W] -> [1,C,H,W].
+        return torch.cat(encoded, dim=0).permute(1, 0, 2, 3).unsqueeze(0)  # [M,C,H,W] -> [C,M,H,W] -> [1,C,M,H,W].
+
+    def _encode_empty_video(self, pipe, num_frames, height, width, tiled, tile_size, tile_stride):  # Signature: -> torch.Tensor[1, C, T_lat, H/8, W/8].
+        empty_video = torch.zeros(3, num_frames, height, width, dtype=pipe.torch_dtype, device=pipe.device)  # torch.zeros(shape, dtype, device) creates black conditioning video [3,T,H,W].
+        return pipe.vae.encode(  # WanVideoVAE.encode(...) converts pixel video into latent video.
+            [empty_video],  # Single video item, no batch dim; encode adds/removes batch internally.
+            device=pipe.device,  # Run VAE on the pipeline device.
+            tiled=tiled,  # Forward the existing VAE tiling flag.
+            tile_size=tile_size,  # Forward VAE tile size.
+            tile_stride=tile_stride,  # Forward VAE tile stride.
+        ).to(dtype=pipe.torch_dtype, device=pipe.device)  # Ensure returned latent dtype/device match the rest of the pipeline.
+
+    def _storymem_mask(self, pipe, memory_size, num_frames, latent_height, latent_width, video_latent_frames, input_image, end_image):  # Signature: -> torch.Tensor[4, M+T_lat, H/8, W/8].
+        msk = torch.ones(1, num_frames + memory_size, latent_height, latent_width, device=pipe.device)  # Pixel-time mask before VAE temporal packing; 1 means condition token is fixed.
+        msk[:, memory_size:] = 0  # Generated shot frames are not fixed by default; memory frames stay fixed.
+        if input_image is not None:  # If the sample also uses first-frame I2V conditioning...
+            msk[:, memory_size] = 1  # ...mark the first generated shot frame as fixed, matching Wan I2V mask convention.
+        if end_image is not None:  # If FLF2V-style end image conditioning is present...
+            msk[:, -1] = 1  # ...mark the final generated frame as fixed.
+        msk = torch.concat([  # torch.concat(tensors, dim=1) expands the first memory+first-shot section for Wan temporal packing.
+            torch.repeat_interleave(msk[:, :memory_size + 1], repeats=4, dim=1),  # repeat_interleave(..., repeats=4, dim=1) mirrors StoryMem/Wan first-frame VAE handling.
+            msk[:, memory_size + 1:]  # Remaining pixel frames are appended without repetition.
+        ], dim=1)  # Result is still a pixel-time mask but with repeated frames for VAE grouping.
+        expected_frames = memory_size + video_latent_frames  # Total latent temporal length after prepending M memory latents.
+        if msk.shape[1] != expected_frames * 4:  # Guard against variable input lengths after VAE temporal downsampling.
+            raise ValueError(f"StoryMem mask length mismatch: got {msk.shape[1]}, expected {expected_frames * 4}.")
+        msk = msk.view(1, expected_frames, 4, latent_height, latent_width)  # Tensor.view(...) groups every 4 pixel-time mask slices into latent-time channels.
+        return msk.transpose(1, 2)[0]  # transpose(1,2): [1,T,4,H,W] -> [1,4,T,H,W], then remove batch -> [4,T,H,W].
+
+    def process(  # PipelineUnit process signature; PipelineUnitRunner passes inputs by keyword from inputs_shared.
+        self, pipe: WanVideoPipeline, memory_images, noise, latents, input_latents, y,  # pipe plus memory images and diffusion tensors.
+        input_image, end_image, num_frames, height, width, tiled, tile_size, tile_stride,  # optional I2V state, size, and VAE tiling flags.
+    ):  # Returns dict with updated tensors and integer memory_size.
+        if memory_images is None:
+            return {"memory_size": 0}  # Explicitly expose zero so model_fn_wan_video keeps the standard RoPE path.
+        if not isinstance(memory_images, list) or len(memory_images) == 0:
+            raise ValueError("StoryMem memory_images must be a non-empty list of PIL images.")
+        if any(image is None for image in memory_images):
+            raise ValueError("StoryMem memory_images must not contain None entries.")
+        if not pipe.dit.require_vae_embedding:  # StoryMem uses y channels, so the loaded DiT must accept VAE conditioning.
+            raise ValueError("StoryMem memory conditioning requires a Wan DiT with VAE conditioning channels.")  # Fail early before channel mismatch in Conv3d.
+        if input_latents is None:  # Training loss needs clean target latents from input_video.
+            raise ValueError("StoryMem memory training requires input_video so input_latents can be built.")  # Fail with an actionable message.
+
+        pipe.load_models_to_device(self.onload_model_names)  # BasePipeline.load_models_to_device(("vae",)) onloads VAE under VRAM management.
+        memory_latents = self._encode_memory_images(pipe, memory_images, height, width, tiled, tile_size, tile_stride)  # [1,16,M,H/8,W/8].
+        memory_latents = memory_latents.to(dtype=pipe.torch_dtype, device=pipe.device)  # Tensor.to(dtype, device) aligns memory latents with DiT inputs.
+        memory_size = memory_latents.shape[2]  # M: number of memory latent frames; one per memory image.
+        video_latent_frames = input_latents.shape[2]  # T_lat: latent length of the current training shot.
+        latent_height, latent_width = input_latents.shape[-2:]  # Spatial latent size [H/8,W/8].
+
+        memory_noise = torch.randn(  # torch.randn(shape, dtype, device) creates Gaussian flow-matching noise for the prepended memory time slots.
+            memory_latents.shape,  # Match memory latent shape exactly: [1,C,M,H,W].
+            dtype=noise.dtype,  # Match existing noise dtype.
+            device=noise.device,  # Match existing noise device.
+        )  # End memory noise allocation.
+        noise = torch.cat([memory_noise, noise], dim=2)  # Prepend memory noise along temporal latent dimension.
+        if latents is not None:  # In inference/data-process paths latents may already exist.
+            latents = torch.cat([memory_noise.to(dtype=latents.dtype, device=latents.device), latents], dim=2)  # Keep latents temporal length aligned with noise.
+        input_latents = torch.cat([memory_latents.to(dtype=input_latents.dtype, device=input_latents.device), input_latents], dim=2)  # Clean target gets fixed memory latents prepended.
+
+        if y is None:  # If no I2V/MI2V VAE condition was created by WanVideoUnit_ImageEmbedderVAE...
+            video_condition_latents = self._encode_empty_video(  # ...create the zero-video condition used by StoryMem when only memory is supplied.
+                pipe, num_frames, height, width, tiled, tile_size, tile_stride  # Pass through sample shape and VAE tiling controls.
+            )  # Returns [1,16,T_lat,H,W].
+        else:  # Existing y contains 4 mask channels followed by VAE condition channels.
+            video_condition_latents = y[:, 4:]  # Slice away mask channels; keep only latent condition channels [B,C,T,H,W].
+        condition_latents = torch.cat([  # Build y latent channels by prepending memory to the current-shot condition.
+            memory_latents.to(dtype=video_condition_latents.dtype, device=video_condition_latents.device),  # Align memory condition dtype/device.
+            video_condition_latents,  # Existing video/I2V condition latents.
+        ], dim=2)  # Concatenate along latent time: [B,C,M+T,H,W].
+        msk = self._storymem_mask(  # Create StoryMem/Wan mask channels [4,M+T,H,W].
+            pipe, memory_size, num_frames, latent_height, latent_width,  # Pipeline and shape metadata.
+            video_latent_frames, input_image, end_image,  # Current-shot latent length and optional fixed endpoint flags.
+        )  # End mask construction.
+        y = torch.cat([msk.to(dtype=condition_latents.dtype).unsqueeze(0), condition_latents], dim=1)  # Add batch to mask, then channel-concat mask+latents -> y.
+
+        return {  # PipelineUnitRunner merges this dict into inputs_shared.
+            "noise": noise,  # Updated noisy seed tensor with memory time slots.
+            "latents": latents,  # Updated current latents when present; may stay None in training pre-loss path.
+            "input_latents": input_latents,  # Clean target latents with memory prefix.
+            "y": y.to(dtype=pipe.torch_dtype, device=pipe.device),  # Conditioning tensor [B,4+C,M+T,H,W] consumed by model_fn_wan_video.
+            "memory_size": memory_size,  # Integer M, used by model_fn_wan_video to choose StoryMem RoPE positions.
+        }  # End returned shared inputs.
 
 
 
@@ -1273,6 +1387,27 @@ def wantodance_get_single_freqs(freqs, frame_num, fps):
     return freqs_new
 
 
+def storymem_select_temporal_freqs(freqs_0, positions):  # Signature: (freqs_0: torch.Tensor[L,D], positions: torch.Tensor[F]) -> torch.Tensor[F,D].
+    """Select temporal RoPE frequencies for positive and negative StoryMem positions.
+
+    Used functions:
+        Tensor.to(device=...) -> torch.Tensor: moves/casts tensor metadata.
+        Tensor.abs() -> torch.Tensor: elementwise absolute value.
+        Tensor.max().item() -> Python scalar: used for bounds check.
+        Tensor.clone() -> torch.Tensor: copies selected frequencies before in-place conjugation.
+        Tensor.conj() -> torch.Tensor: complex conjugate; implements cis(-t)=conj(cis(t)).
+    """
+    positions = positions.to(device=freqs_0.device)  # Move position indices onto the same device as the precomputed RoPE table.
+    abs_positions = positions.abs()  # Negative temporal coordinates reuse positive table indices by absolute value.
+    if abs_positions.max().item() >= freqs_0.shape[0]:  # Validate that every requested coordinate exists in the precomputed table.
+        raise ValueError(f"StoryMem temporal RoPE position {abs_positions.max().item()} exceeds precomputed length {freqs_0.shape[0]}.")  # Fail before out-of-range indexing.
+    freqs = freqs_0[abs_positions].clone()  # Advanced indexing selects [F,D] complex RoPE rows; clone allows later masked assignment.
+    neg_mask = positions < 0  # Boolean tensor marking memory positions, which are negative in StoryMem.
+    if neg_mask.any():  # Tensor.any() checks whether any negative position exists.
+        freqs[neg_mask] = freqs[neg_mask].conj()  # Complex conjugate changes cis(t) into cis(-t) for negative memory coordinates.
+    return freqs  # Return [F,D] temporal RoPE table aligned with the patched temporal length.
+
+
 def model_fn_wan_video(
     dit: WanModel,
     motion_controller: WanMotionControllerModel = None,
@@ -1311,6 +1446,7 @@ def model_fn_wan_video(
     wantodance_fps: float = 30.0,
     music_feature = None,
     skip_9th_layer: bool = False,
+    memory_size: int = 0,  # Number of StoryMem memory latent frames prepended on time dim; 0 keeps standard DiffSynth RoPE.
     **kwargs,
 ):
     if sliding_window_size is not None and sliding_window_stride is not None:
@@ -1329,6 +1465,7 @@ def model_fn_wan_video(
             tea_cache=tea_cache,
             use_unified_sequence_parallel=use_unified_sequence_parallel,
             motion_bucket_id=motion_bucket_id,
+            memory_size=memory_size,  # Forward StoryMem memory length into sliding-window calls so tiled denoising uses identical RoPE.
         )
         return TemporalTiler_BCTHW().run(
             model_fn_wan_video,
@@ -1423,14 +1560,27 @@ def model_fn_wan_video(
     
     # Reference image
     if reference_latents is not None:
+        if memory_size > 0:  # reference_latents also prepends tokens, so combining it with StoryMem memory would make RoPE semantics ambiguous.
+            raise ValueError("StoryMem memory conditioning is not supported together with reference_latents in model_fn_wan_video.")
         if len(reference_latents.shape) == 5:
             reference_latents = reference_latents[:, :, 0]
         reference_latents = dit.ref_conv(reference_latents).flatten(2).transpose(1, 2)
         x = torch.concat([reference_latents, x], dim=1)
         f += 1
-    
+
+    if memory_size > 0:  # StoryMem path: the first M temporal patches are memory tokens with negative RoPE coordinates.
+        if memory_size >= f:  # A valid sample must contain at least one current-shot latent frame after the memory prefix.
+            raise ValueError(f"memory_size ({memory_size}) must be smaller than patched temporal length ({f}).")  # Fail with shape context.
+        pos_t = torch.cat([  # torch.cat(list, dim=0) joins memory positions and generated-shot positions into one [F] index tensor.
+            torch.arange(-memory_size * MEMORY_ROPE_SHIFT, 0, MEMORY_ROPE_SHIFT, device=dit.freqs[0].device),  # torch.arange(start,end,step): [-M*5,...,-5].
+            torch.arange(0, f - memory_size, device=dit.freqs[0].device),  # torch.arange(0,T): generated-shot positions [0,...,T-1].
+        ]).long()  # Tensor.long() converts position tensor to int64 for tensor indexing.
+        freqs_t = storymem_select_temporal_freqs(dit.freqs[0], pos_t)  # Convert signed StoryMem positions into complex RoPE rows [F,D_t].
+    else:  # Standard DiffSynth path for all existing Wan variants.
+        freqs_t = dit.freqs[0][:f]  # Slice first F temporal RoPE rows, preserving old behavior exactly.
+
     freqs = torch.cat([
-        dit.freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+        freqs_t.view(f, 1, 1, -1).expand(f, h, w, -1),
         dit.freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
         dit.freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
     ], dim=-1).reshape(f * h * w, 1, -1).to(x.device)
