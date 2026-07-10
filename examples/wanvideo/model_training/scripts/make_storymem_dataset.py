@@ -11,10 +11,11 @@ Example:
     python examples/wanvideo/model_training/scripts/make_storymem_dataset.py \
         --video input.mp4 \
         --start 00:01:23.5 \
+        --end 00:01:28.5 \
         --prompt "A character walks into the room." \
         --output data/storymem_single_shot \
-        --num-frames 49 \
-        --fps 24
+        --num-frames 81 \
+        --fps 16
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import csv
 import json
 import subprocess
 import shutil
+import tempfile
 from pathlib import Path
 
 
@@ -94,6 +96,10 @@ def build_video_filter(fps: float, width: int | None, height: int | None) -> str
     return ",".join(filters)
 
 
+def quality_to_crf(quality: int) -> str:
+    return str(max(1, min(31, 33 - quality * 3)))
+
+
 def ffmpeg_make_video(
     ffmpeg: str,
     source: Path,
@@ -106,7 +112,6 @@ def ffmpeg_make_video(
     quality: int,
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    crf = str(max(1, min(31, 33 - quality * 3)))
     command = [
         ffmpeg,
         "-y",
@@ -124,12 +129,21 @@ def ffmpeg_make_video(
         "-preset",
         "medium",
         "-crf",
-        crf,
+        quality_to_crf(quality),
         "-pix_fmt",
         "yuv420p",
         str(target),
     ]
     run_command(command)
+
+
+def evenly_spaced_times(start_seconds: float, end_seconds: float, num_frames: int) -> list[float]:
+    if end_seconds <= start_seconds:
+        raise ValueError("--end must be greater than --start")
+    if num_frames == 1:
+        return [start_seconds]
+    stride = (end_seconds - start_seconds) / (num_frames - 1)
+    return [start_seconds + i * stride for i in range(num_frames)]
 
 
 def ffmpeg_extract_frame(
@@ -154,6 +168,71 @@ def ffmpeg_extract_frame(
         command += ["-vf", scale_filter]
     command += ["-frames:v", "1", str(target)]
     run_command(command)
+
+
+def ffmpeg_encode_frame_sequence(
+    ffmpeg: str,
+    frame_pattern: Path,
+    target: Path,
+    fps: float,
+    num_frames: int,
+    quality: int,
+) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg,
+        "-y",
+        "-framerate",
+        f"{fps}",
+        "-i",
+        str(frame_pattern),
+        "-frames:v",
+        str(num_frames),
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        quality_to_crf(quality),
+        "-pix_fmt",
+        "yuv420p",
+        str(target),
+    ]
+    run_command(command)
+
+
+def ffmpeg_make_evenly_sampled_video(
+    ffmpeg: str,
+    source: Path,
+    target: Path,
+    start_seconds: float,
+    end_seconds: float,
+    num_frames: int,
+    fps: float,
+    width: int | None,
+    height: int | None,
+    quality: int,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="storymem_frames_") as temp_dir:
+        temp_path = Path(temp_dir)
+        for index, seconds in enumerate(evenly_spaced_times(start_seconds, end_seconds, num_frames)):
+            ffmpeg_extract_frame(
+                ffmpeg,
+                source,
+                temp_path / f"frame_{index:06d}.png",
+                seconds,
+                width,
+                height,
+            )
+        ffmpeg_encode_frame_sequence(
+            ffmpeg,
+            temp_path / "frame_%06d.png",
+            target,
+            fps,
+            num_frames,
+            quality,
+        )
 
 
 def relative_to_base(path: Path, base: Path) -> str:
@@ -181,12 +260,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate StoryMem dataset metadata and video sample.")
     parser.add_argument("--video", required=True, type=Path, help="Source video path.")
     parser.add_argument("--start", required=True, help="Sample start time, in seconds or HH:MM:SS(.sss).")
+    parser.add_argument("--end", default=None, help="Optional sample end time. If set, frames are sampled evenly from start to end.")
     parser.add_argument("--output", type=Path, default=Path("data/storymem_single_shot"), help="Dataset base directory.")
     parser.add_argument("--metadata-name", default="metadata.csv", help="Metadata filename under --output.")
     parser.add_argument("--prompt", default="", help="Prompt written to metadata.csv.")
     parser.add_argument("--sample-name", default=None, help="Optional sample basename. Defaults to sample_XXXXXX.")
-    parser.add_argument("--num-frames", type=int, default=49, help="Number of frames in output sample. Must be 4n+1.")
-    parser.add_argument("--fps", type=float, default=24.0, help="Output sampling fps.")
+    parser.add_argument("--num-frames", type=int, default=81, help="Number of frames in output sample. Must be 4n+1.")
+    parser.add_argument("--fps", type=float, default=16.0, help="Output video fps. Wan 81 frames at 16 fps is about 5 seconds.")
     parser.add_argument("--width", type=int, default=None, help="Optional output video width.")
     parser.add_argument("--height", type=int, default=None, help="Optional output video height.")
     parser.add_argument("--quality", type=int, default=8, help="MP4 quality, usually 1-10.")
@@ -225,6 +305,7 @@ def main() -> None:
 
     ffmpeg = require_binary("ffmpeg")
     start_seconds = parse_time(args.start)
+    end_seconds = parse_time(args.end) if args.end is not None else None
     num_frames = ensure_num_frames(args.num_frames)
     output_dir = args.output.expanduser().resolve()
     metadata_path = output_dir / args.metadata_name
@@ -236,10 +317,16 @@ def main() -> None:
     if not args.overwrite and (video_out.exists() or memory_dir.exists()):
         raise FileExistsError(f"{sample_name} already exists. Use --overwrite or choose --sample-name.")
 
-    ffmpeg_make_video(
-        ffmpeg, video_path, video_out, start_seconds,
-        num_frames, args.fps, args.width, args.height, args.quality,
-    )
+    if end_seconds is None:
+        ffmpeg_make_video(
+            ffmpeg, video_path, video_out, start_seconds,
+            num_frames, args.fps, args.width, args.height, args.quality,
+        )
+    else:
+        ffmpeg_make_evenly_sampled_video(
+            ffmpeg, video_path, video_out, start_seconds, end_seconds,
+            num_frames, args.fps, args.width, args.height, args.quality,
+        )
 
     if args.overwrite and memory_dir.exists():
         shutil.rmtree(memory_dir)
