@@ -3,10 +3,10 @@
 set -e
 # Bash option: exit immediately if any command returns a non-zero status.
 
-# Parameter expansion ${VAR:?msg}: require high-noise DiT checkpoint/model entry.
-: "${STORYMEM_HIGH_NOISE_MODEL:?Set STORYMEM_HIGH_NOISE_MODEL to the high-noise StoryMem/MI2V DiT checkpoint or model_id:pattern entry.}"
-# Parameter expansion ${VAR:?msg}: require low-noise DiT checkpoint/model entry.
-: "${STORYMEM_LOW_NOISE_MODEL:?Set STORYMEM_LOW_NOISE_MODEL to the low-noise StoryMem/MI2V DiT checkpoint or model_id:pattern entry.}"
+# Parameter expansion ${VAR:=default}: high-noise DiT checkpoint/model entry.
+: "${STORYMEM_HIGH_NOISE_MODEL:=Wan-AI/Wan2.2-I2V-A14B:high_noise_model/diffusion_pytorch_model*.safetensors}"
+# Parameter expansion ${VAR:=default}: low-noise DiT checkpoint/model entry.
+: "${STORYMEM_LOW_NOISE_MODEL:=Wan-AI/Wan2.2-I2V-A14B:low_noise_model/diffusion_pytorch_model*.safetensors}"
 # Parameter expansion ${VAR:=default}: default shared Wan T5 encoder model entry.
 : "${STORYMEM_T5_MODEL:=Wan-AI/Wan2.2-T2V-A14B:models_t5_umt5-xxl-enc-bf16.pth}"
 # Parameter expansion ${VAR:=default}: default shared Wan VAE model entry.

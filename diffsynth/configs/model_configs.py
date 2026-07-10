@@ -275,6 +275,9 @@ wan_series = [
     },
     {
         # Example: ModelConfig(model_id="Wan-AI/Wan2.2-I2V-A14B", origin_file_pattern="high_noise_model/diffusion_pytorch_model*.safetensors")
+        # StoryMem M2V/MI2V uses the same VAE-conditioned Wan2.2 A14B DiT layout:
+        # ModelConfig(model_id="Wan-AI/Wan2.2-I2V-A14B", origin_file_pattern="high_noise_model/diffusion_pytorch_model*.safetensors")
+        # ModelConfig(model_id="Wan-AI/Wan2.2-I2V-A14B", origin_file_pattern="low_noise_model/diffusion_pytorch_model*.safetensors")
         "model_hash": "5b013604280dd715f8457c6ed6d6a626",
         "model_name": "wan_video_dit",
         "model_class": "diffsynth.models.wan_video_dit.WanModel",
