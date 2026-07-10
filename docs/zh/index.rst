@@ -73,6 +73,7 @@
    API_Reference/core/gradient
    API_Reference/core/loader
    API_Reference/core/vram
+   API_Reference/wan_video/wan_video
 
 .. toctree::
    :maxdepth: 2

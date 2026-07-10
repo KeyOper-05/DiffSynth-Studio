@@ -84,6 +84,7 @@ graph LR;
 * [`diffsynth.core.gradient`](./API_Reference/core/gradient.md): 梯度检查点
 * [`diffsynth.core.loader`](./API_Reference/core/loader.md): 模型下载与加载
 * [`diffsynth.core.vram`](./API_Reference/core/vram.md): 显存管理
+* [`diffsynth.pipelines.wan_video`](./API_Reference/wan_video/wan_video.md): Wan Video Pipeline、模型、数据流与外部库函数
 
 ## Section 6: Diffusion Templates
 
