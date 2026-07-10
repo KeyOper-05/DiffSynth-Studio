@@ -1,7 +1,7 @@
-STORYMEM_HIGH_NOISE_MODEL="${STORYMEM_HIGH_NOISE_MODEL:-Wan-AI/Wan2.2-I2V-A14B:high_noise_model/diffusion_pytorch_model*.safetensors}"
-STORYMEM_LOW_NOISE_MODEL="${STORYMEM_LOW_NOISE_MODEL:-Wan-AI/Wan2.2-I2V-A14B:low_noise_model/diffusion_pytorch_model*.safetensors}"
-STORYMEM_T5_MODEL="${STORYMEM_T5_MODEL:-Wan-AI/Wan2.2-T2V-A14B:models_t5_umt5-xxl-enc-bf16.pth}"
-STORYMEM_VAE_MODEL="${STORYMEM_VAE_MODEL:-Wan-AI/Wan2.2-T2V-A14B:Wan2.1_VAE.pth}"
+STORYMEM_HIGH_NOISE_MODEL_PATHS="${STORYMEM_HIGH_NOISE_MODEL_PATHS:-[\"../Wan2.2_Pretrained/i2v/high_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/high_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/high_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/high_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/high_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/high_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"]}"
+STORYMEM_LOW_NOISE_MODEL_PATHS="${STORYMEM_LOW_NOISE_MODEL_PATHS:-[\"../Wan2.2_Pretrained/i2v/low_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/low_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/low_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/low_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/low_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"../Wan2.2_Pretrained/i2v/low_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"]}"
+STORYMEM_T5_MODEL_PATH="${STORYMEM_T5_MODEL_PATH:-\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\"}"
+STORYMEM_VAE_MODEL_PATH="${STORYMEM_VAE_MODEL_PATH:-\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"}"
 
 DATASET_BASE="${DATASET_BASE:-data/storymem_single_shot}"
 METADATA_PATH="${METADATA_PATH:-${DATASET_BASE}/metadata.csv}"
@@ -14,7 +14,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --width "${WIDTH:-832}" \
   --num_frames "${NUM_FRAMES:-49}" \
   --dataset_repeat "${DATASET_REPEAT:-100}" \
-  --model_id_with_origin_paths "${STORYMEM_HIGH_NOISE_MODEL},${STORYMEM_T5_MODEL},${STORYMEM_VAE_MODEL}" \
+  --model_paths "[${STORYMEM_HIGH_NOISE_MODEL_PATHS},${STORYMEM_T5_MODEL_PATH},${STORYMEM_VAE_MODEL_PATH}]" \
   --learning_rate "${LEARNING_RATE:-1e-4}" \
   --num_epochs "${NUM_EPOCHS:-5}" \
   --remove_prefix_in_ckpt "pipe.dit." \
@@ -36,7 +36,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --width "${WIDTH:-832}" \
   --num_frames "${NUM_FRAMES:-49}" \
   --dataset_repeat "${DATASET_REPEAT:-100}" \
-  --model_id_with_origin_paths "${STORYMEM_LOW_NOISE_MODEL},${STORYMEM_T5_MODEL},${STORYMEM_VAE_MODEL}" \
+  --model_paths "[${STORYMEM_LOW_NOISE_MODEL_PATHS},${STORYMEM_T5_MODEL_PATH},${STORYMEM_VAE_MODEL_PATH}]" \
   --learning_rate "${LEARNING_RATE:-1e-4}" \
   --num_epochs "${NUM_EPOCHS:-5}" \
   --remove_prefix_in_ckpt "pipe.dit." \
