@@ -14,8 +14,7 @@ Example:
         --end 00:01:28.5 \
         --prompt "A character walks into the room." \
         --output data/storymem_single_shot \
-        --num-frames 81 \
-        --fps 16
+        --num-frames 49
 """
 
 from __future__ import annotations
@@ -98,43 +97,6 @@ def build_video_filter(fps: float, width: int | None, height: int | None) -> str
 
 def quality_to_crf(quality: int) -> str:
     return str(max(1, min(31, 33 - quality * 3)))
-
-
-def ffmpeg_make_video(
-    ffmpeg: str,
-    source: Path,
-    target: Path,
-    start_seconds: float,
-    num_frames: int,
-    fps: float,
-    width: int | None,
-    height: int | None,
-    quality: int,
-) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        ffmpeg,
-        "-y",
-        "-ss",
-        f"{start_seconds:.6f}",
-        "-i",
-        str(source),
-        "-vf",
-        build_video_filter(fps, width, height),
-        "-frames:v",
-        str(num_frames),
-        "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        quality_to_crf(quality),
-        "-pix_fmt",
-        "yuv420p",
-        str(target),
-    ]
-    run_command(command)
 
 
 def evenly_spaced_times(start_seconds: float, end_seconds: float, num_frames: int) -> list[float]:
@@ -260,13 +222,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate StoryMem dataset metadata and video sample.")
     parser.add_argument("--video", required=True, type=Path, help="Source video path.")
     parser.add_argument("--start", required=True, help="Sample start time, in seconds or HH:MM:SS(.sss).")
-    parser.add_argument("--end", default=None, help="Optional sample end time. If set, frames are sampled evenly from start to end.")
+    parser.add_argument("--end", required=True, help="Sample end time. Frames are sampled evenly from start to end.")
     parser.add_argument("--output", type=Path, default=Path("data/storymem_single_shot"), help="Dataset base directory.")
     parser.add_argument("--metadata-name", default="metadata.csv", help="Metadata filename under --output.")
     parser.add_argument("--prompt", default="", help="Prompt written to metadata.csv.")
     parser.add_argument("--sample-name", default=None, help="Optional sample basename. Defaults to sample_XXXXXX.")
-    parser.add_argument("--num-frames", type=int, default=81, help="Number of frames in output sample. Must be 4n+1.")
-    parser.add_argument("--fps", type=float, default=16.0, help="Output video fps. Wan 81 frames at 16 fps is about 5 seconds.")
+    parser.add_argument("--num-frames", type=int, default=49, help="Number of evenly sampled frames in output sample. Must be 4n+1.")
+    parser.add_argument("--fps", type=float, default=None, help="Optional output video fps. Defaults to num_frames / (end - start), preserving playback duration.")
     parser.add_argument("--width", type=int, default=None, help="Optional output video width.")
     parser.add_argument("--height", type=int, default=None, help="Optional output video height.")
     parser.add_argument("--quality", type=int, default=8, help="MP4 quality, usually 1-10.")
@@ -298,15 +260,18 @@ def main() -> None:
         raise FileNotFoundError(video_path)
     if video_path.suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError(f"unsupported video extension: {video_path.suffix}")
-    if args.fps <= 0:
+    if args.fps is not None and args.fps <= 0:
         raise ValueError("--fps must be positive")
     if not 1 <= args.quality <= 10:
         raise ValueError("--quality must be between 1 and 10")
 
     ffmpeg = require_binary("ffmpeg")
     start_seconds = parse_time(args.start)
-    end_seconds = parse_time(args.end) if args.end is not None else None
+    end_seconds = parse_time(args.end)
+    if end_seconds <= start_seconds:
+        raise ValueError("--end must be greater than --start")
     num_frames = ensure_num_frames(args.num_frames)
+    output_fps = args.fps if args.fps is not None else num_frames / (end_seconds - start_seconds)
     output_dir = args.output.expanduser().resolve()
     metadata_path = output_dir / args.metadata_name
     sample_id = next_sample_id(metadata_path)
@@ -317,16 +282,10 @@ def main() -> None:
     if not args.overwrite and (video_out.exists() or memory_dir.exists()):
         raise FileExistsError(f"{sample_name} already exists. Use --overwrite or choose --sample-name.")
 
-    if end_seconds is None:
-        ffmpeg_make_video(
-            ffmpeg, video_path, video_out, start_seconds,
-            num_frames, args.fps, args.width, args.height, args.quality,
-        )
-    else:
-        ffmpeg_make_evenly_sampled_video(
-            ffmpeg, video_path, video_out, start_seconds, end_seconds,
-            num_frames, args.fps, args.width, args.height, args.quality,
-        )
+    ffmpeg_make_evenly_sampled_video(
+        ffmpeg, video_path, video_out, start_seconds, end_seconds,
+        num_frames, output_fps, args.width, args.height, args.quality,
+    )
 
     if args.overwrite and memory_dir.exists():
         shutil.rmtree(memory_dir)

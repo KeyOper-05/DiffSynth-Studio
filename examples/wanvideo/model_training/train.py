@@ -6,6 +6,29 @@ from diffsynth.diffusion import *
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
+def _format_mib(num_bytes):
+    return f"{num_bytes / (1024 ** 2):.2f} MiB"
+
+
+def _device_is_cuda(device):
+    try:
+        return torch.device(device).type == "cuda"
+    except (TypeError, RuntimeError):
+        return False
+
+
+def _iter_named_tensors(value, prefix):
+    if isinstance(value, torch.Tensor):
+        yield prefix, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            next_prefix = f"{prefix}.{key}" if prefix else str(key)
+            yield from _iter_named_tensors(item, next_prefix)
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            yield from _iter_named_tensors(item, f"{prefix}[{index}]")
+
+
 class LoadStoryMemMemoryImages:
     def __init__(self, base_path, height=None, width=None, max_pixels=1920 * 1080):
         self.image_operator = (
@@ -50,6 +73,10 @@ class WanTrainingModule(DiffusionTrainingModule):
         task="sft",
         max_timestep_boundary=1.0,
         min_timestep_boundary=0.0,
+        debug_memory=False,
+        debug_memory_units=False,
+        debug_memory_tensors_topk=20,
+        debug_memory_summary=False,
     ):
         super().__init__()
         # Warning
@@ -79,6 +106,10 @@ class WanTrainingModule(DiffusionTrainingModule):
         self.extra_inputs = extra_inputs.split(",") if extra_inputs is not None else []
         self.fp8_models = fp8_models
         self.task = task
+        self.debug_memory = debug_memory
+        self.debug_memory_units = debug_memory_units
+        self.debug_memory_tensors_topk = debug_memory_tensors_topk
+        self.debug_memory_summary = debug_memory_summary
         self.task_to_loss = {
             "sft:data_process": lambda pipe, *args: args,
             "direct_distill:data_process": lambda pipe, *args: args,
@@ -89,6 +120,45 @@ class WanTrainingModule(DiffusionTrainingModule):
         }
         self.max_timestep_boundary = max_timestep_boundary
         self.min_timestep_boundary = min_timestep_boundary
+
+    def _debug_memory_snapshot(self, tag, inputs=None):
+        if not self.debug_memory or not _device_is_cuda(self.pipe.device) or not torch.cuda.is_available():
+            return
+        device = torch.device(self.pipe.device)
+        torch.cuda.synchronize(device)
+        allocated = torch.cuda.memory_allocated(device)
+        reserved = torch.cuda.memory_reserved(device)
+        peak_allocated = torch.cuda.max_memory_allocated(device)
+        peak_reserved = torch.cuda.max_memory_reserved(device)
+        free, total = torch.cuda.mem_get_info(device)
+        rank = os.environ.get("LOCAL_RANK", "0")
+        print(
+            f"[VRAM][rank {rank}][{tag}] "
+            f"allocated={_format_mib(allocated)} ({allocated / total * 100:.2f}% total), "
+            f"reserved={_format_mib(reserved)} ({reserved / total * 100:.2f}% total), "
+            f"peak_allocated={_format_mib(peak_allocated)}, "
+            f"peak_reserved={_format_mib(peak_reserved)}, "
+            f"free={_format_mib(free)}, total={_format_mib(total)}",
+            flush=True,
+        )
+        if inputs is not None and self.debug_memory_tensors_topk != 0:
+            seen = set()
+            tensors = []
+            for scope, value in zip(("shared", "posi", "nega"), inputs):
+                for name, tensor in _iter_named_tensors(value, scope):
+                    if id(tensor) in seen:
+                        continue
+                    seen.add(id(tensor))
+                    nbytes = tensor.numel() * tensor.element_size()
+                    tensors.append((nbytes, name, tuple(tensor.shape), str(tensor.dtype), str(tensor.device)))
+            tensors.sort(reverse=True, key=lambda item: item[0])
+            topk = len(tensors) if self.debug_memory_tensors_topk < 0 else min(self.debug_memory_tensors_topk, len(tensors))
+            total_input_bytes = sum(item[0] for item in tensors)
+            print(f"[VRAM][rank {rank}][{tag}] input_tensors_total={_format_mib(total_input_bytes)} unique_tensors={len(tensors)}", flush=True)
+            for nbytes, name, shape, dtype, tensor_device in tensors[:topk]:
+                print(f"  [tensor] {name}: shape={shape}, dtype={dtype}, device={tensor_device}, size={_format_mib(nbytes)}", flush=True)
+        if self.debug_memory_summary:
+            print(torch.cuda.memory_summary(device=device, abbreviated=True), flush=True)
         
     def parse_extra_inputs(self, data, extra_inputs, inputs_shared):
         for extra_input in extra_inputs:
@@ -132,10 +202,18 @@ class WanTrainingModule(DiffusionTrainingModule):
     
     def forward(self, data, inputs=None):
         if inputs is None: inputs = self.get_pipeline_inputs(data)
+        if self.debug_memory and _device_is_cuda(self.pipe.device) and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(torch.device(self.pipe.device))
+            self._debug_memory_snapshot("before_transfer", inputs)
         inputs = self.transfer_data_to_device(inputs, self.pipe.device, self.pipe.torch_dtype)
+        self._debug_memory_snapshot("after_transfer", inputs)
         for unit in self.pipe.units:
             inputs = self.pipe.unit_runner(unit, self.pipe, *inputs)
+            if self.debug_memory_units:
+                self._debug_memory_snapshot(f"after_unit:{unit.__class__.__name__}", inputs)
+        self._debug_memory_snapshot("before_loss", inputs)
         loss = self.task_to_loss[self.task](self.pipe, *inputs)
+        self._debug_memory_snapshot("after_loss", inputs)
         return loss
 
 
@@ -149,6 +227,10 @@ def wan_parser():
     parser.add_argument("--min_timestep_boundary", type=float, default=0.0, help="Min timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
     parser.add_argument("--initialize_model_on_cpu", default=False, action="store_true", help="Whether to initialize models on CPU.")
     parser.add_argument("--framewise_decoding", default=False, action="store_true", help="Enable it if this model is a WanToDance global model.")
+    parser.add_argument("--debug_memory", default=False, action="store_true", help="Print CUDA memory allocator stats during each training forward.")
+    parser.add_argument("--debug_memory_units", default=False, action="store_true", help="With --debug_memory, print stats after every WanVideoPipeline unit.")
+    parser.add_argument("--debug_memory_tensors_topk", type=int, default=20, help="With --debug_memory, print the largest N live input tensors. Use -1 for all, 0 to disable tensor list.")
+    parser.add_argument("--debug_memory_summary", default=False, action="store_true", help="With --debug_memory, also print torch.cuda.memory_summary.")
     return parser
 
 
@@ -209,6 +291,10 @@ if __name__ == "__main__":
         device="cpu" if (args.initialize_model_on_cpu or args.enable_model_cpu_offload) else accelerator.device,
         max_timestep_boundary=args.max_timestep_boundary,
         min_timestep_boundary=args.min_timestep_boundary,
+        debug_memory=args.debug_memory,
+        debug_memory_units=args.debug_memory_units,
+        debug_memory_tensors_topk=args.debug_memory_tensors_topk,
+        debug_memory_summary=args.debug_memory_summary,
     )
     model_logger = ModelLogger(
         args.output_path,
