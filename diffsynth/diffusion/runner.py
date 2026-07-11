@@ -30,6 +30,12 @@ def save_training_args(args):
         print(f"Warning: failed to save training arguments: {e}")
 
 
+def debug_memory_snapshot(model, tag):
+    snapshot = getattr(model, "_debug_memory_snapshot", None)
+    if snapshot is not None:
+        snapshot(tag)
+
+
 def launch_training_task(
     accelerator: Accelerator,
     dataset: torch.utils.data.Dataset,
@@ -82,13 +88,22 @@ def launch_training_task(
                     loss = model({}, inputs=data)
                 else:
                     loss = model(data)
-                accelerator.backward(loss)
-                if enable_model_cpu_offload:
-                    offload_manager.after_backward()
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
-                model_logger.on_step_end(accelerator, model, save_steps, loss=loss)
+                try:
+                    debug_memory_snapshot(model, "before_backward")
+                    accelerator.backward(loss)
+                    debug_memory_snapshot(model, "after_backward")
+                    if enable_model_cpu_offload:
+                        offload_manager.after_backward()
+                        debug_memory_snapshot(model, "after_offload_after_backward")
+                    optimizer.step()
+                    debug_memory_snapshot(model, "after_optimizer_step")
+                    scheduler.step()
+                    optimizer.zero_grad()
+                    debug_memory_snapshot(model, "after_zero_grad")
+                    model_logger.on_step_end(accelerator, model, save_steps, loss=loss)
+                except Exception:
+                    debug_memory_snapshot(model, "on_exception")
+                    raise
         if save_steps is None:
             model_logger.on_epoch_end(accelerator, model, epoch_id)
 
