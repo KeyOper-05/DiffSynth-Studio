@@ -10,11 +10,50 @@ def _format_mib(num_bytes):
     return f"{num_bytes / (1024 ** 2):.2f} MiB"
 
 
-def _device_is_cuda(device):
+def _memory_backend(device):
     try:
-        return torch.device(device).type == "cuda"
+        device = torch.device(device)
     except (TypeError, RuntimeError):
-        return False
+        return None, None
+    if device.type == "cuda" and torch.cuda.is_available():
+        return torch.cuda, device
+    if device.type == "npu" and hasattr(torch, "npu"):
+        try:
+            if torch.npu.is_available():
+                return torch.npu, device
+        except (AttributeError, RuntimeError):
+            return None, None
+    return None, None
+
+
+def _call_memory_api(backend, name, device=None, default=0):
+    fn = getattr(backend, name, None)
+    if fn is None:
+        return default
+    try:
+        return fn(device) if device is not None else fn()
+    except TypeError:
+        try:
+            return fn()
+        except Exception:
+            return default
+    except Exception:
+        return default
+
+
+def _mem_get_info(backend, device):
+    fn = getattr(backend, "mem_get_info", None)
+    if fn is None:
+        return None, None
+    try:
+        return fn(device)
+    except TypeError:
+        try:
+            return fn()
+        except Exception:
+            return None, None
+    except Exception:
+        return None, None
 
 
 def _iter_named_tensors(value, prefix):
@@ -122,23 +161,27 @@ class WanTrainingModule(DiffusionTrainingModule):
         self.min_timestep_boundary = min_timestep_boundary
 
     def _debug_memory_snapshot(self, tag, inputs=None):
-        if not self.debug_memory or not _device_is_cuda(self.pipe.device) or not torch.cuda.is_available():
+        backend, device = _memory_backend(self.pipe.device)
+        if not self.debug_memory or backend is None:
             return
-        device = torch.device(self.pipe.device)
-        torch.cuda.synchronize(device)
-        allocated = torch.cuda.memory_allocated(device)
-        reserved = torch.cuda.memory_reserved(device)
-        peak_allocated = torch.cuda.max_memory_allocated(device)
-        peak_reserved = torch.cuda.max_memory_reserved(device)
-        free, total = torch.cuda.mem_get_info(device)
+        _call_memory_api(backend, "synchronize", device, default=None)
+        allocated = _call_memory_api(backend, "memory_allocated", device)
+        reserved = _call_memory_api(backend, "memory_reserved", device)
+        peak_allocated = _call_memory_api(backend, "max_memory_allocated", device)
+        peak_reserved = _call_memory_api(backend, "max_memory_reserved", device)
+        free, total = _mem_get_info(backend, device)
         rank = os.environ.get("LOCAL_RANK", "0")
+        allocated_ratio = f"{allocated / total * 100:.2f}% total" if total else "total unknown"
+        reserved_ratio = f"{reserved / total * 100:.2f}% total" if total else "total unknown"
+        free_text = _format_mib(free) if free is not None else "unknown"
+        total_text = _format_mib(total) if total is not None else "unknown"
         print(
-            f"[VRAM][rank {rank}][{tag}] "
-            f"allocated={_format_mib(allocated)} ({allocated / total * 100:.2f}% total), "
-            f"reserved={_format_mib(reserved)} ({reserved / total * 100:.2f}% total), "
+            f"[VRAM][{device.type}][rank {rank}][{tag}] "
+            f"allocated={_format_mib(allocated)} ({allocated_ratio}), "
+            f"reserved={_format_mib(reserved)} ({reserved_ratio}), "
             f"peak_allocated={_format_mib(peak_allocated)}, "
             f"peak_reserved={_format_mib(peak_reserved)}, "
-            f"free={_format_mib(free)}, total={_format_mib(total)}",
+            f"free={free_text}, total={total_text}",
             flush=True,
         )
         if inputs is not None and self.debug_memory_tensors_topk != 0:
@@ -154,11 +197,21 @@ class WanTrainingModule(DiffusionTrainingModule):
             tensors.sort(reverse=True, key=lambda item: item[0])
             topk = len(tensors) if self.debug_memory_tensors_topk < 0 else min(self.debug_memory_tensors_topk, len(tensors))
             total_input_bytes = sum(item[0] for item in tensors)
-            print(f"[VRAM][rank {rank}][{tag}] input_tensors_total={_format_mib(total_input_bytes)} unique_tensors={len(tensors)}", flush=True)
+            print(f"[VRAM][{device.type}][rank {rank}][{tag}] input_tensors_total={_format_mib(total_input_bytes)} unique_tensors={len(tensors)}", flush=True)
             for nbytes, name, shape, dtype, tensor_device in tensors[:topk]:
                 print(f"  [tensor] {name}: shape={shape}, dtype={dtype}, device={tensor_device}, size={_format_mib(nbytes)}", flush=True)
         if self.debug_memory_summary:
-            print(torch.cuda.memory_summary(device=device, abbreviated=True), flush=True)
+            summary_fn = getattr(backend, "memory_summary", None)
+            if summary_fn is not None:
+                try:
+                    print(summary_fn(device=device, abbreviated=True), flush=True)
+                except TypeError:
+                    try:
+                        print(summary_fn(device, abbreviated=True), flush=True)
+                    except Exception:
+                        print(f"[VRAM][{device.type}][rank {rank}][{tag}] memory_summary unavailable.", flush=True)
+                except Exception:
+                    print(f"[VRAM][{device.type}][rank {rank}][{tag}] memory_summary unavailable.", flush=True)
         
     def parse_extra_inputs(self, data, extra_inputs, inputs_shared):
         for extra_input in extra_inputs:
@@ -202,8 +255,9 @@ class WanTrainingModule(DiffusionTrainingModule):
     
     def forward(self, data, inputs=None):
         if inputs is None: inputs = self.get_pipeline_inputs(data)
-        if self.debug_memory and _device_is_cuda(self.pipe.device) and torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats(torch.device(self.pipe.device))
+        backend, device = _memory_backend(self.pipe.device)
+        if self.debug_memory and backend is not None:
+            _call_memory_api(backend, "reset_peak_memory_stats", device, default=None)
             self._debug_memory_snapshot("before_transfer", inputs)
         inputs = self.transfer_data_to_device(inputs, self.pipe.device, self.pipe.torch_dtype)
         self._debug_memory_snapshot("after_transfer", inputs)
@@ -227,10 +281,10 @@ def wan_parser():
     parser.add_argument("--min_timestep_boundary", type=float, default=0.0, help="Min timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
     parser.add_argument("--initialize_model_on_cpu", default=False, action="store_true", help="Whether to initialize models on CPU.")
     parser.add_argument("--framewise_decoding", default=False, action="store_true", help="Enable it if this model is a WanToDance global model.")
-    parser.add_argument("--debug_memory", default=False, action="store_true", help="Print CUDA memory allocator stats during each training forward.")
+    parser.add_argument("--debug_memory", default=False, action="store_true", help="Print CUDA/NPU memory allocator stats during each training forward.")
     parser.add_argument("--debug_memory_units", default=False, action="store_true", help="With --debug_memory, print stats after every WanVideoPipeline unit.")
     parser.add_argument("--debug_memory_tensors_topk", type=int, default=20, help="With --debug_memory, print the largest N live input tensors. Use -1 for all, 0 to disable tensor list.")
-    parser.add_argument("--debug_memory_summary", default=False, action="store_true", help="With --debug_memory, also print torch.cuda.memory_summary.")
+    parser.add_argument("--debug_memory_summary", default=False, action="store_true", help="With --debug_memory, also print backend memory_summary when available.")
     return parser
 
 
