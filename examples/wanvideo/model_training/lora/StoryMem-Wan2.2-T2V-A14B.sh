@@ -7,8 +7,13 @@ STORYMEM_PRESET_LORA_DIR="${STORYMEM_PRESET_LORA_DIR-../StoryMem_Pretrained/Wan2
 PRESET_HIGH_LORA_ARGS=()
 PRESET_LOW_LORA_ARGS=()
 if [ -n "${STORYMEM_PRESET_LORA_DIR}" ]; then
-  STORYMEM_PRESET_HIGH_LORA="${STORYMEM_PRESET_HIGH_LORA:-${STORYMEM_PRESET_LORA_DIR}/backbone_high_noise.safetensors}"
-  STORYMEM_PRESET_LOW_LORA="${STORYMEM_PRESET_LOW_LORA:-${STORYMEM_PRESET_LORA_DIR}/backbone_low_noise.safetensors}"
+  STORYMEM_PRESET_HIGH_LORA_RAW="${STORYMEM_PRESET_HIGH_LORA:-${STORYMEM_PRESET_LORA_DIR}/backbone_high_noise.safetensors}"
+  STORYMEM_PRESET_LOW_LORA_RAW="${STORYMEM_PRESET_LOW_LORA:-${STORYMEM_PRESET_LORA_DIR}/backbone_low_noise.safetensors}"
+  STORYMEM_PRESET_LORA_CACHE_DIR="${STORYMEM_PRESET_LORA_CACHE_DIR:-./models/train/storymem_preset_lora_converted}"
+  STORYMEM_PRESET_HIGH_LORA="${STORYMEM_PRESET_LORA_CACHE_DIR}/backbone_high_noise.safetensors"
+  STORYMEM_PRESET_LOW_LORA="${STORYMEM_PRESET_LORA_CACHE_DIR}/backbone_low_noise.safetensors"
+  python examples/wanvideo/model_training/lora/converter.py --src "${STORYMEM_PRESET_HIGH_LORA_RAW}" --dst "${STORYMEM_PRESET_HIGH_LORA}"
+  python examples/wanvideo/model_training/lora/converter.py --src "${STORYMEM_PRESET_LOW_LORA_RAW}" --dst "${STORYMEM_PRESET_LOW_LORA}"
   PRESET_HIGH_LORA_ARGS=(--preset_lora_path "${STORYMEM_PRESET_HIGH_LORA}" --preset_lora_model "dit")
   PRESET_LOW_LORA_ARGS=(--preset_lora_path "${STORYMEM_PRESET_LOW_LORA}" --preset_lora_model "dit")
 fi
