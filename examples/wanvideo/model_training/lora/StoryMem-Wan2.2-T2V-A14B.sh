@@ -47,7 +47,8 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   "${DEBUG_CHECKPOINT_ARGS[@]}" \
   --extra_inputs "memory_images" \
   --max_timestep_boundary 0.417 \
-  --min_timestep_boundary 0
+  --min_timestep_boundary 0 \
+  --initialize_model_on_cpu
 # boundary corresponds to timesteps [875, 1000]
 
 
@@ -71,5 +72,6 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   "${DEBUG_CHECKPOINT_ARGS[@]}" \
   --extra_inputs "memory_images" \
   --max_timestep_boundary 1 \
-  --min_timestep_boundary 0.417
+  --min_timestep_boundary 0.417 \
+  --initialize_model_on_cpu
 # boundary corresponds to timesteps [0, 875)
