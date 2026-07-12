@@ -1,9 +1,49 @@
-import torch, os, argparse, accelerate, warnings, json
+import torch, os, argparse, accelerate, warnings, json, time, sys, faulthandler
 from diffsynth.core import UnifiedDataset
 from diffsynth.core.data.operators import LoadVideo, LoadAudio, LoadImage, ImageCropAndResize, ToAbsolutePath
 from diffsynth.pipelines.wan_video import WanVideoPipeline, ModelConfig
 from diffsynth.diffusion import *
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+def _current_rss_mib():
+    status_path = "/proc/self/status"
+    if not os.path.exists(status_path):
+        return "unknown"
+    try:
+        with open(status_path) as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    value_kib = int(line.split()[1])
+                    return f"{value_kib / 1024:.2f} MiB"
+    except Exception:
+        return "unknown"
+    return "unknown"
+
+
+def _debug_checkpoint(enabled, tag, start_time=None, device=None):
+    if not enabled:
+        return
+    rank = os.environ.get("RANK", "?")
+    local_rank = os.environ.get("LOCAL_RANK", "?")
+    elapsed = ""
+    if start_time is not None:
+        elapsed = f" elapsed={time.time() - start_time:.2f}s"
+    device_text = f" device={device}" if device is not None else ""
+    print(
+        f"[CHECKPOINT][rank {rank} local {local_rank} pid {os.getpid()}]"
+        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}][{tag}]"
+        f"{elapsed}{device_text} rss={_current_rss_mib()}",
+        flush=True,
+    )
+
+
+def _enable_checkpoint_tracebacks(enabled, seconds):
+    if not enabled or seconds <= 0:
+        return
+    faulthandler.enable(file=sys.stderr, all_threads=True)
+    faulthandler.dump_traceback_later(seconds, repeat=True, file=sys.stderr)
+    _debug_checkpoint(True, f"faulthandler_enabled:{seconds}s")
 
 
 def _format_mib(num_bytes):
@@ -116,28 +156,49 @@ class WanTrainingModule(DiffusionTrainingModule):
         debug_memory_units=False,
         debug_memory_tensors_topk=20,
         debug_memory_summary=False,
+        debug_checkpoints=False,
     ):
         super().__init__()
+        init_start = time.time()
+        _debug_checkpoint(debug_checkpoints, "WanTrainingModule:init:start", init_start, device)
         # Warning
         if not use_gradient_checkpointing:
             warnings.warn("Gradient checkpointing is detected as disabled. To prevent out-of-memory errors, the training framework will forcibly enable gradient checkpointing.")
             use_gradient_checkpointing = True
 
         # Load models
+        step_start = time.time()
+        _debug_checkpoint(debug_checkpoints, "parse_model_configs:start", init_start, device)
         model_configs = self.parse_model_configs(model_paths, model_id_with_origin_paths, fp8_models=fp8_models, offload_models=offload_models, device=device)
+        _debug_checkpoint(debug_checkpoints, "parse_model_configs:done", step_start, device)
+        step_start = time.time()
+        _debug_checkpoint(debug_checkpoints, "tokenizer_config:start", init_start, device)
         tokenizer_config = ModelConfig(model_id="Wan-AI/Wan2.1-T2V-1.3B", origin_file_pattern="google/umt5-xxl/") if tokenizer_path is None else ModelConfig(tokenizer_path)
         audio_processor_config = self.parse_path_or_model_id(audio_processor_path)
+        _debug_checkpoint(debug_checkpoints, "tokenizer_config:done", step_start, device)
+        step_start = time.time()
+        _debug_checkpoint(debug_checkpoints, "WanVideoPipeline.from_pretrained:start", init_start, device)
         self.pipe = WanVideoPipeline.from_pretrained(torch_dtype=torch.bfloat16, device=device, model_configs=model_configs, tokenizer_config=tokenizer_config, audio_processor_config=audio_processor_config)
+        _debug_checkpoint(debug_checkpoints, "WanVideoPipeline.from_pretrained:done", step_start, device)
+        step_start = time.time()
+        _debug_checkpoint(debug_checkpoints, "split_pipeline_units:start", init_start, device)
         self.pipe = self.split_pipeline_units(task, self.pipe, trainable_models, lora_base_model)
+        _debug_checkpoint(debug_checkpoints, "split_pipeline_units:done", step_start, device)
+        step_start = time.time()
+        _debug_checkpoint(debug_checkpoints, "resume_from_checkpoint:start", init_start, device)
         self.resume_from_checkpoint(resume_from_checkpoint, remove_prefix_in_ckpt)
+        _debug_checkpoint(debug_checkpoints, "resume_from_checkpoint:done", step_start, device)
         
         # Training mode
+        step_start = time.time()
+        _debug_checkpoint(debug_checkpoints, "switch_pipe_to_training_mode:start", init_start, device)
         self.switch_pipe_to_training_mode(
             self.pipe, trainable_models,
             lora_base_model, lora_target_modules, lora_rank, lora_checkpoint,
             preset_lora_path, preset_lora_model,
             task=task,
         )
+        _debug_checkpoint(debug_checkpoints, "switch_pipe_to_training_mode:done", step_start, device)
         
         # Store other configs
         self.use_gradient_checkpointing = use_gradient_checkpointing
@@ -149,6 +210,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         self.debug_memory_units = debug_memory_units
         self.debug_memory_tensors_topk = debug_memory_tensors_topk
         self.debug_memory_summary = debug_memory_summary
+        self.debug_checkpoints = debug_checkpoints
         self.task_to_loss = {
             "sft:data_process": lambda pipe, *args: args,
             "direct_distill:data_process": lambda pipe, *args: args,
@@ -159,6 +221,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         }
         self.max_timestep_boundary = max_timestep_boundary
         self.min_timestep_boundary = min_timestep_boundary
+        _debug_checkpoint(debug_checkpoints, "WanTrainingModule:init:done", init_start, device)
 
     def _debug_memory_snapshot(self, tag, inputs=None):
         backend, device = _memory_backend(self.pipe.device)
@@ -285,20 +348,27 @@ def wan_parser():
     parser.add_argument("--debug_memory_units", default=False, action="store_true", help="With --debug_memory, print stats after every WanVideoPipeline unit.")
     parser.add_argument("--debug_memory_tensors_topk", type=int, default=20, help="With --debug_memory, print the largest N live input tensors. Use -1 for all, 0 to disable tensor list.")
     parser.add_argument("--debug_memory_summary", default=False, action="store_true", help="With --debug_memory, also print backend memory_summary when available.")
+    parser.add_argument("--debug_checkpoints", default=False, action="store_true", help="Print rank-aware checkpoints around slow initialization and launch stages.")
+    parser.add_argument("--debug_checkpoint_trace_after", type=int, default=0, help="With --debug_checkpoints, dump Python stack traces every N seconds while the process is still running.")
     return parser
 
 
 if __name__ == "__main__":
+    script_start = time.time()
     parser = wan_parser()
     args = parser.parse_args()
+    _enable_checkpoint_tracebacks(args.debug_checkpoints, args.debug_checkpoint_trace_after)
+    _debug_checkpoint(args.debug_checkpoints, "main:args_parsed", script_start)
     accelerator = accelerate.Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         kwargs_handlers=[accelerate.DistributedDataParallelKwargs(find_unused_parameters=args.find_unused_parameters)],
     )
+    _debug_checkpoint(args.debug_checkpoints, "accelerator:init:done", script_start, accelerator.device)
     data_file_keys = [key for key in args.data_file_keys.split(",") if key]
     extra_inputs = [] if args.extra_inputs is None else [key for key in args.extra_inputs.split(",") if key]
     if "memory_images" in extra_inputs and "memory_images" not in data_file_keys:
         raise ValueError("Using --extra_inputs memory_images requires --data_file_keys to include memory_images.")
+    _debug_checkpoint(args.debug_checkpoints, "dataset:create:start", script_start, accelerator.device)
     dataset = UnifiedDataset(
         base_path=args.dataset_base_path,
         metadata_path=args.dataset_metadata_path,
@@ -322,6 +392,8 @@ if __name__ == "__main__":
             "wantodance_music_path": ToAbsolutePath(args.dataset_base_path),
         }
     )
+    _debug_checkpoint(args.debug_checkpoints, "dataset:create:done", script_start, accelerator.device)
+    _debug_checkpoint(args.debug_checkpoints, "model:create:start", script_start, accelerator.device)
     model = WanTrainingModule(
         model_paths=args.model_paths,
         model_id_with_origin_paths=args.model_id_with_origin_paths,
@@ -349,7 +421,10 @@ if __name__ == "__main__":
         debug_memory_units=args.debug_memory_units,
         debug_memory_tensors_topk=args.debug_memory_tensors_topk,
         debug_memory_summary=args.debug_memory_summary,
+        debug_checkpoints=args.debug_checkpoints,
     )
+    _debug_checkpoint(args.debug_checkpoints, "model:create:done", script_start, accelerator.device)
+    _debug_checkpoint(args.debug_checkpoints, "model_logger:create:start", script_start, accelerator.device)
     model_logger = ModelLogger(
         args.output_path,
         remove_prefix_in_ckpt=args.remove_prefix_in_ckpt,
@@ -359,6 +434,7 @@ if __name__ == "__main__":
         enable_wandb_log=args.enable_wandb_log,
         wandb_project=args.wandb_project,
     )
+    _debug_checkpoint(args.debug_checkpoints, "model_logger:create:done", script_start, accelerator.device)
     launcher_map = {
         "sft:data_process": launch_data_process_task,
         "direct_distill:data_process": launch_data_process_task,
@@ -367,4 +443,6 @@ if __name__ == "__main__":
         "direct_distill": launch_training_task,
         "direct_distill:train": launch_training_task,
     }
+    _debug_checkpoint(args.debug_checkpoints, f"launcher:start:{args.task}", script_start, accelerator.device)
     launcher_map[args.task](accelerator, dataset, model, model_logger, args=args)
+    _debug_checkpoint(args.debug_checkpoints, f"launcher:done:{args.task}", script_start, accelerator.device)

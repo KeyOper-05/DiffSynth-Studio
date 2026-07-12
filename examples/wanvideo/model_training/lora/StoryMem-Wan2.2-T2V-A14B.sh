@@ -3,6 +3,12 @@ STORYMEM_LOW_NOISE_MODEL_PATHS="${STORYMEM_LOW_NOISE_MODEL_PATHS:-[\"../Wan2.2_P
 STORYMEM_T5_MODEL_PATH="${STORYMEM_T5_MODEL_PATH:-\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\"}"
 STORYMEM_VAE_MODEL_PATH="${STORYMEM_VAE_MODEL_PATH:-\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"}"
 
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+DEBUG_CHECKPOINT_ARGS=()
+if [ "${STORYMEM_DEBUG_CHECKPOINTS:-1}" != "0" ]; then
+  DEBUG_CHECKPOINT_ARGS=(--debug_checkpoints --debug_checkpoint_trace_after "${STORYMEM_DEBUG_TRACE_AFTER:-300}")
+fi
+
 STORYMEM_PRESET_LORA_DIR="${STORYMEM_PRESET_LORA_DIR-../StoryMem_Pretrained/Wan2.2-MI2V-A14B}"
 PRESET_HIGH_LORA_ARGS=()
 PRESET_LOW_LORA_ARGS=()
@@ -38,6 +44,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
   --lora_rank "${LORA_RANK:-32}" \
   "${PRESET_HIGH_LORA_ARGS[@]}" \
+  "${DEBUG_CHECKPOINT_ARGS[@]}" \
   --extra_inputs "memory_images" \
   --max_timestep_boundary 0.417 \
   --min_timestep_boundary 0
@@ -61,6 +68,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
   --lora_rank "${LORA_RANK:-32}" \
   "${PRESET_LOW_LORA_ARGS[@]}" \
+  "${DEBUG_CHECKPOINT_ARGS[@]}" \
   --extra_inputs "memory_images" \
   --max_timestep_boundary 1 \
   --min_timestep_boundary 0.417

@@ -75,6 +75,32 @@ def parse_lora_module_name(key, strip_prefix=False):
     return module_name, stripped_prefix
 
 
+def simulate_diffsynth_target_name(key):
+    lora_b_key = "lora_up" if ".lora_up." in key else "lora_B"
+    if lora_b_key not in key:
+        return None
+
+    parts = key.split(".")
+    marker_index = parts.index(lora_b_key)
+    if len(parts) > marker_index + 2:
+        parts.pop(marker_index + 1)
+    parts.pop(marker_index)
+    if parts and parts[0] == "diffusion_model":
+        parts.pop(0)
+    if parts:
+        parts.pop(-1)
+    return ".".join(parts)
+
+
+def simulate_diffsynth_loader_modules(keys):
+    modules = []
+    for key in keys:
+        target_name = simulate_diffsynth_target_name(key)
+        if target_name is not None:
+            modules.append(target_name)
+    return sorted(set(modules))
+
+
 def storymem_supported_modules():
     num_layers = STORYMEM_MODEL_CONFIG["extra_kwargs"]["num_layers"]
     per_block_modules = [
@@ -134,6 +160,7 @@ def inspect_safetensors(path, limit, strip_prefix):
 
     raw_modules = sorted(set(raw_modules))
     normalized_modules = sorted(set(normalized_modules))
+    diffsynth_modules = simulate_diffsynth_loader_modules(keys)
 
     print_section("parsed LoRA target modules")
     print(f"raw_module_count: {len(raw_modules)}")
@@ -146,6 +173,11 @@ def inspect_safetensors(path, limit, strip_prefix):
         print(f"stripped_prefixes: {dict(stripped_prefixes)}")
         for name in normalized_modules[:limit]:
             print(name)
+
+    print_section("DiffSynth GeneralLoRALoader simulated target modules")
+    print(f"diffsynth_module_count: {len(diffsynth_modules)}")
+    for name in diffsynth_modules[:limit]:
+        print(name)
 
     return normalized_modules if strip_prefix else raw_modules
 
