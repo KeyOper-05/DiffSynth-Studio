@@ -1,5 +1,5 @@
-export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
-export CPU_AFFINITY_CONF=1
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True #重要！
+export CPU_AFFINITY_CONF=1 #重要！
 
 modelscope download --dataset DiffSynth-Studio/diffsynth_example_dataset --include "wanvideo/Wan2.2-T2V-A14B/*" --local_dir ./data/diffsynth_example_dataset
 

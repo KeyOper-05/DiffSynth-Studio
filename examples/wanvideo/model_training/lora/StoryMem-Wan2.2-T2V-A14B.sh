@@ -1,3 +1,6 @@
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export CPU_AFFINITY_CONF=1
+
 accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
   --dataset_base_path data/storymem_single_shot \
   --dataset_metadata_path data/storymem_single_shot/metadata.csv \
@@ -13,14 +16,14 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --output_path "./models/train/StoryMem-Wan2.2-T2V-A14B_high_noise_lora" \
   --lora_base_model "dit" \
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
-  --lora_rank 32 \
+  --lora_rank 16 \
   --extra_inputs "memory_images" \
   --max_timestep_boundary 0.417 \
   --min_timestep_boundary 0 \
-  --debug_checkpoints \
-  --debug_checkpoint_trace_after 300 \
   --initialize_model_on_cpu
 # boundary corresponds to timesteps [875, 1000]
+# vram1: 当前lora rank设置为16，可以试试是否能调整为32
+# vram2: Do not find activation_checkpointing config in deepspeed config, skip initializing deepspeed gradient checkpointing. 可以优化试试
 
 
 accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
@@ -38,11 +41,9 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --output_path "./models/train/StoryMem-Wan2.2-T2V-A14B_low_noise_lora" \
   --lora_base_model "dit" \
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
-  --lora_rank 32 \
+  --lora_rank 16 \
   --extra_inputs "memory_images" \
   --max_timestep_boundary 1 \
   --min_timestep_boundary 0.417 \
-  --debug_checkpoints \
-  --debug_checkpoint_trace_after 300 \
   --initialize_model_on_cpu
 # boundary corresponds to timesteps [0, 875)
