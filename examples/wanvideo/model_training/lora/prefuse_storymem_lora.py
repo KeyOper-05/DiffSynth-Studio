@@ -1,5 +1,6 @@
 import argparse
 import glob
+import math
 import os
 
 import torch
@@ -59,6 +60,15 @@ def load_lora(lora_path):
     return GeneralLoRALoader().convert_state_dict(state_dict)
 
 
+def effective_lora_scale(alpha, lora_alpha, lora_rank, rslora):
+    if lora_alpha is None:
+        return alpha
+    if lora_rank is None or lora_rank <= 0:
+        raise ValueError("--lora_rank must be a positive integer when --lora_alpha is set.")
+    rank_scale = math.sqrt(lora_rank) if rslora else lora_rank
+    return alpha * lora_alpha / rank_scale
+
+
 def fuse_weight(base_weight, lora_up, lora_down, alpha, compute_device, compute_dtype):
     base_dtype = base_weight.dtype
     base_device = base_weight.device
@@ -83,7 +93,7 @@ def release_accelerator_cache(device):
         torch.cuda.empty_cache()
 
 
-def prefuse_lora(base_shards, lora_path, output_dir, alpha, compute_device, compute_dtype):
+def prefuse_lora(base_shards, lora_path, output_dir, alpha, lora_alpha, lora_rank, rslora, compute_device, compute_dtype):
     base_shards = expand_paths(base_shards)
     if not base_shards:
         raise ValueError("No base shards were provided.")
@@ -95,6 +105,12 @@ def prefuse_lora(base_shards, lora_path, output_dir, alpha, compute_device, comp
 
     os.makedirs(output_dir, exist_ok=True)
     lora = load_lora(lora_path)
+    scale = effective_lora_scale(alpha, lora_alpha, lora_rank, rslora)
+    print(
+        f"Using LoRA fusion scale {scale:.8g} "
+        f"(alpha={alpha}, lora_alpha={lora_alpha}, lora_rank={lora_rank}, rslora={rslora}).",
+        flush=True,
+    )
     lora_layer_names = {
         key.replace(".lora_B.weight", "")
         for key in lora
@@ -114,7 +130,7 @@ def prefuse_lora(base_shards, lora_path, output_dir, alpha, compute_device, comp
                 shard[weight_key],
                 lora[f"{name}.lora_B.weight"],
                 lora[f"{name}.lora_A.weight"],
-                alpha,
+                scale,
                 compute_device,
                 compute_dtype,
             )
@@ -142,7 +158,10 @@ def parse_args():
     parser.add_argument("--base_shards", nargs="+", required=True, help="Base DiT safetensors shard paths or glob patterns.")
     parser.add_argument("--lora_path", required=True, help="StoryMem preset LoRA safetensors path.")
     parser.add_argument("--output_dir", required=True, help="Directory for fused DiT safetensors shards.")
-    parser.add_argument("--alpha", type=float, default=1.0, help="LoRA scale used for fusion.")
+    parser.add_argument("--alpha", type=float, default=1.0, help="Extra multiplier applied after the LoRA config scale.")
+    parser.add_argument("--lora_alpha", type=float, default=None, help="LoRA alpha from the training config. If unset, only --alpha is used.")
+    parser.add_argument("--lora_rank", type=int, default=None, help="LoRA rank from the training config. Required when --lora_alpha is set.")
+    parser.add_argument("--rslora", action="store_true", help="Use rsLoRA scaling, lora_alpha / sqrt(rank), instead of lora_alpha / rank.")
     parser.add_argument("--compute_device", default="cpu", help="Device used for LoRA matrix multiplications, e.g. cpu or npu:0.")
     parser.add_argument("--compute_dtype", default="bf16", choices=("bf16", "bfloat16", "fp32", "float32", "fp16", "float16"))
     return parser.parse_args()
@@ -155,6 +174,9 @@ if __name__ == "__main__":
         lora_path=args.lora_path,
         output_dir=args.output_dir,
         alpha=args.alpha,
+        lora_alpha=args.lora_alpha,
+        lora_rank=args.lora_rank,
+        rslora=args.rslora,
         compute_device=prepare_device(args.compute_device),
         compute_dtype=dtype_from_name(args.compute_dtype),
     )
