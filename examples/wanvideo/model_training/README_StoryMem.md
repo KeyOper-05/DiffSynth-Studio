@@ -259,7 +259,7 @@ bash examples/wanvideo/model_training/lora/StoryMem-Wan2.2-T2V-A14B.sh
 ```bash
 --model_id_with_origin_paths "${STORYMEM_HIGH_NOISE_MODEL},${STORYMEM_T5_MODEL},${STORYMEM_VAE_MODEL}"
 --output_path "./models/train/StoryMem-Wan2.2-T2V-A14B_high_noise_lora"
---max_timestep_boundary 0.417
+--max_timestep_boundary 0.1
 --min_timestep_boundary 0
 ```
 
@@ -269,8 +269,10 @@ bash examples/wanvideo/model_training/lora/StoryMem-Wan2.2-T2V-A14B.sh
 --model_id_with_origin_paths "${STORYMEM_LOW_NOISE_MODEL},${STORYMEM_T5_MODEL},${STORYMEM_VAE_MODEL}"
 --output_path "./models/train/StoryMem-Wan2.2-T2V-A14B_low_noise_lora"
 --max_timestep_boundary 1
---min_timestep_boundary 0.417
+--min_timestep_boundary 0.1
 ```
+
+这里和原 StoryMem 的 `boundary = 0.900` 对齐。DiffSynth 训练时的 Wan timestep 按高到低排列，所以 `t >= 900` 的 high-noise 区间对应 index fraction `[0, 0.1)`，`t < 900` 的 low-noise 区间对应 `[0.1, 1)`。
 
 公共 LoRA 配置为：
 
