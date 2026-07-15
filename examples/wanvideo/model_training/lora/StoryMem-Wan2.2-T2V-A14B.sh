@@ -2,8 +2,8 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export CPU_AFFINITY_CONF=1
 
 accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
-  --dataset_base_path data/storymem_single_shot \
-  --dataset_metadata_path data/storymem_single_shot/metadata.csv \
+  --dataset_base_path data/$1 \
+  --dataset_metadata_path data/$1/metadata.csv \
   --data_file_keys "video,memory_images" \
   --height 480 \
   --width 832 \
@@ -13,7 +13,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --learning_rate 1e-4 \
   --num_epochs 5 \
   --remove_prefix_in_ckpt "pipe.dit." \
-  --output_path "./models/train/StoryMem-Wan2.2-T2V-A14B_high_noise_lora" \
+  --output_path "./models/train/$1_high_noise_lora" \
   --lora_base_model "dit" \
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
   --lora_rank 16 \
@@ -27,8 +27,8 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
 
 
 accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
-  --dataset_base_path data/storymem_single_shot \
-  --dataset_metadata_path data/storymem_single_shot/metadata.csv \
+  --dataset_base_path data/$1 \
+  --dataset_metadata_path data/$1/metadata.csv \
   --data_file_keys "video,memory_images" \
   --height 480 \
   --width 832 \
@@ -38,7 +38,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --learning_rate 1e-4 \
   --num_epochs 5 \
   --remove_prefix_in_ckpt "pipe.dit." \
-  --output_path "./models/train/StoryMem-Wan2.2-T2V-A14B_low_noise_lora" \
+  --output_path "./models/train/$1_low_noise_lora" \
   --lora_base_model "dit" \
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
   --lora_rank 16 \
