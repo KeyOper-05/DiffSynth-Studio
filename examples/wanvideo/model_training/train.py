@@ -279,7 +279,7 @@ class WanTrainingModule(DiffusionTrainingModule):
     def parse_extra_inputs(self, data, extra_inputs, inputs_shared):
         for extra_input in extra_inputs:
             if extra_input == "input_image":
-                inputs_shared["input_image"] = data["video"][0]
+                inputs_shared["input_image"] = data.get("input_image", data["video"][0])
             elif extra_input == "end_image":
                 inputs_shared["end_image"] = data["video"][-1]
             elif extra_input == "reference_image" or extra_input == "vace_reference_image":
@@ -368,6 +368,8 @@ if __name__ == "__main__":
     extra_inputs = [] if args.extra_inputs is None else [key for key in args.extra_inputs.split(",") if key]
     if "memory_images" in extra_inputs and "memory_images" not in data_file_keys:
         raise ValueError("Using --extra_inputs memory_images requires --data_file_keys to include memory_images.")
+    if "input_image" in extra_inputs and "input_image" not in data_file_keys:
+        raise ValueError("Using --extra_inputs input_image requires --data_file_keys to include input_image.")
     _debug_checkpoint(args.debug_checkpoints, "dataset:create:start", script_start, accelerator.device)
     dataset = UnifiedDataset(
         base_path=args.dataset_base_path,
@@ -388,6 +390,7 @@ if __name__ == "__main__":
         special_operator_map={
             "animate_face_video": ToAbsolutePath(args.dataset_base_path) >> LoadVideo(args.num_frames, 4, 1, frame_processor=ImageCropAndResize(512, 512, None, 16, 16)),
             "input_audio": ToAbsolutePath(args.dataset_base_path) >> LoadAudio(sr=16000),
+            "input_image": ToAbsolutePath(args.dataset_base_path) >> LoadImage() >> ImageCropAndResize(args.height, args.width, args.max_pixels, 16, 16),
             "memory_images": LoadStoryMemMemoryImages(args.dataset_base_path, args.height, args.width, args.max_pixels),  # memory_images metadata -> list[PIL.Image] for StoryMem pipeline unit.
             "wantodance_music_path": ToAbsolutePath(args.dataset_base_path),
         }

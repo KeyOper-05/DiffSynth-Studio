@@ -27,6 +27,13 @@ def FlowMatchSFTLoss(pipe: BasePipeline, **inputs):
     if "first_frame_latents" in inputs:
         noise_pred = noise_pred[:, :, 1:]
         training_target = training_target[:, :, 1:]
+    memory_size = int(inputs.get("memory_size", 0) or 0)
+    if memory_size > 0:
+        loss_start = memory_size
+        if inputs.get("input_image") is not None:
+            loss_start += 1
+        noise_pred = noise_pred[:, :, loss_start:]
+        training_target = training_target[:, :, loss_start:]
     
     loss = torch.nn.functional.mse_loss(noise_pred.float(), training_target.float())
     loss = loss * pipe.scheduler.training_weight(timestep)
