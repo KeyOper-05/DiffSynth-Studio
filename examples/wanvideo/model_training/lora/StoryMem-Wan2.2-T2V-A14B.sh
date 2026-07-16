@@ -16,7 +16,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --output_path "./models/train/$1_high_noise_lora" \
   --lora_base_model "dit" \
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
-  --lora_rank 16 \
+  --lora_rank 32 \
   --extra_inputs "memory_images" \
   --max_timestep_boundary 0.1 \
   --min_timestep_boundary 0 \
@@ -42,7 +42,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --output_path "./models/train/$1_low_noise_lora" \
   --lora_base_model "dit" \
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
-  --lora_rank 16 \
+  --lora_rank 32 \
   --extra_inputs "memory_images" \
   --max_timestep_boundary 1 \
   --min_timestep_boundary 0.1 \
