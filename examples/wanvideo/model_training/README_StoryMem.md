@@ -110,18 +110,10 @@ python examples/wanvideo/model_training/scripts/make_storymem_cut_false_dataset.
 也可以用配套 shell 封装：
 
 ```bash
-VIDEO=/path/to/full_or_adjacent_shots.mp4 \
-PREV_END=00:00:05.000 \
-START=00:00:05.000 \
-END=00:00:10.000 \
-PROMPT="The character continues walking into the room." \
-OUTPUT=data/storymem_cut_false_mi2v \
-FPS=16 \
-WIDTH=832 \
-HEIGHT=480 \
-OVERWRITE=1 \
 bash examples/wanvideo/model_training/scripts/make_storymem_cut_false_dataset.sh
 ```
+
+使用这个 `.sh` 时，直接编辑脚本顶部的 `VIDEO`、`PREV_END`、`START`、`END`、`PROMPT`、`OUTPUT` 等变量即可。
 
 生成的 `metadata.csv` 包含：
 
