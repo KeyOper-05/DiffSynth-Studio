@@ -127,13 +127,20 @@ video,prompt,memory_images,input_image,sample_mode
 
 ```bash
 cd DiffSynth-Studio
-bash examples/wanvideo/model_training/lora/StoryMem-Wan2.2-MI2V-cut-false-A14B.sh
+bash examples/wanvideo/model_training/lora/StoryMem-Wan2.2-MI2V-cut-false-A14B.sh flip
 ```
 
 这个脚本默认读取：
 
 ```text
-data/storymem_cut_false_mi2v/metadata.csv
+data/flip/metadata.csv
+```
+
+其中 `flip` 是动作名。每个动作的数据放在 `data/<action_name>/` 下，LoRA 会输出到独立目录：
+
+```text
+./models/train/<action_name>_mi2v_cut_false_high_noise_lora
+./models/train/<action_name>_mi2v_cut_false_low_noise_lora
 ```
 
 并使用：
