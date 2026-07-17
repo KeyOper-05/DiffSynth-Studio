@@ -2,12 +2,12 @@
 set -e
 
 # Edit these values for each sample.
-VIDEO="/path/to/full_or_adjacent_shots.mp4"
-PREV_END="00:00:05.000"
-START="00:00:05.000"
-END="00:00:10.000"
-PROMPT="The character continues walking into the room."
-OUTPUT="data/storymem_cut_false_mi2v"
+VIDEO="data/6am.mp4"
+PREV_END="00:00:00.000"
+START="00:00:00.000"
+END="00:00:04.000"
+PROMPT="A man wakes up in bed, shifts restlessly, then grabs a pillow, rolls onto his side, and pulls it over his head."
+OUTPUT="data/6am"
 
 # Usually keep these defaults unless the training config changes.
 NUM_FRAMES=49
