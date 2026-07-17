@@ -152,6 +152,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         task="sft",
         max_timestep_boundary=1.0,
         min_timestep_boundary=0.0,
+        training_scheduler_shift=None,
         debug_memory=False,
         debug_memory_units=False,
         debug_memory_tensors_topk=20,
@@ -196,6 +197,7 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe, trainable_models,
             lora_base_model, lora_target_modules, lora_rank, lora_checkpoint,
             preset_lora_path, preset_lora_model,
+            training_scheduler_shift=training_scheduler_shift,
             task=task,
         )
         _debug_checkpoint(debug_checkpoints, "switch_pipe_to_training_mode:done", step_start, device)
@@ -221,6 +223,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         }
         self.max_timestep_boundary = max_timestep_boundary
         self.min_timestep_boundary = min_timestep_boundary
+        self.training_scheduler_shift = training_scheduler_shift
         _debug_checkpoint(debug_checkpoints, "WanTrainingModule:init:done", init_start, device)
 
     def _debug_memory_snapshot(self, tag, inputs=None):
@@ -342,6 +345,7 @@ def wan_parser():
     parser.add_argument("--audio_processor_path", type=str, default=None, help="Path to the audio processor. If provided, the processor will be used for Wan2.2-S2V model.")
     parser.add_argument("--max_timestep_boundary", type=float, default=1.0, help="Max timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
     parser.add_argument("--min_timestep_boundary", type=float, default=0.0, help="Min timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
+    parser.add_argument("--training_scheduler_shift", type=float, default=None, help="Optional Wan flow-match scheduler shift used to build the training timestep table.")
     parser.add_argument("--initialize_model_on_cpu", default=False, action="store_true", help="Whether to initialize models on CPU.")
     parser.add_argument("--framewise_decoding", default=False, action="store_true", help="Enable it if this model is a WanToDance global model.")
     parser.add_argument("--debug_memory", default=False, action="store_true", help="Print CUDA/NPU memory allocator stats during each training forward.")
@@ -420,6 +424,7 @@ if __name__ == "__main__":
         device="cpu" if (args.initialize_model_on_cpu or args.enable_model_cpu_offload) else accelerator.device,
         max_timestep_boundary=args.max_timestep_boundary,
         min_timestep_boundary=args.min_timestep_boundary,
+        training_scheduler_shift=args.training_scheduler_shift,
         debug_memory=args.debug_memory,
         debug_memory_units=args.debug_memory_units,
         debug_memory_tensors_topk=args.debug_memory_tensors_topk,

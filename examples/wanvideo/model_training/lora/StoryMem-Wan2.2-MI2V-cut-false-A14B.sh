@@ -6,6 +6,8 @@ if [ -z "$1" ]; then
   exit 1
 fi
 ACTION_NAME="$1"
+TRAINING_SCHEDULER_SHIFT="${TRAINING_SCHEDULER_SHIFT:-4.0}"
+TIMESTEP_BOUNDARY="${TIMESTEP_BOUNDARY:-0.308}"
 
 accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
   --dataset_base_path data/${ACTION_NAME} \
@@ -24,11 +26,12 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
   --lora_rank 16 \
   --extra_inputs "memory_images,input_image" \
-  --max_timestep_boundary 0.1 \
+  --training_scheduler_shift "${TRAINING_SCHEDULER_SHIFT}" \
+  --max_timestep_boundary "${TIMESTEP_BOUNDARY}" \
   --min_timestep_boundary 0 \
   --initialize_model_on_cpu
-# StoryMem boundary is timestep 900. DiffSynth training samples descending timesteps,
-# so high-noise t >= 900 corresponds to index fraction [0, 0.1).
+# StoryMem M2V boundary is timestep 900. With training scheduler shift=4.0,
+# high-noise t >= 900 corresponds to index fraction [0, 0.308).
 
 
 accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
@@ -48,7 +51,8 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
   --lora_rank 16 \
   --extra_inputs "memory_images,input_image" \
+  --training_scheduler_shift "${TRAINING_SCHEDULER_SHIFT}" \
   --max_timestep_boundary 1 \
-  --min_timestep_boundary 0.1 \
+  --min_timestep_boundary "${TIMESTEP_BOUNDARY}" \
   --initialize_model_on_cpu
-# Low-noise t < 900 corresponds to index fraction [0.1, 1).
+# Low-noise t < 900 corresponds to index fraction [0.308, 1).

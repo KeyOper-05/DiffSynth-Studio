@@ -269,10 +269,14 @@ class DiffusionTrainingModule(torch.nn.Module):
         trainable_models=None,
         lora_base_model=None, lora_target_modules="", lora_rank=32, lora_checkpoint=None,
         preset_lora_path=None, preset_lora_model=None,
+        training_scheduler_shift=None,
         task="sft",
     ):
         # Scheduler
-        pipe.scheduler.set_timesteps(1000, training=True)
+        if training_scheduler_shift is None:
+            pipe.scheduler.set_timesteps(1000, training=True)
+        else:
+            pipe.scheduler.set_timesteps(1000, training=True, shift=training_scheduler_shift)
         
         # Freeze untrainable models
         pipe.freeze_except([] if trainable_models is None else trainable_models.split(","))

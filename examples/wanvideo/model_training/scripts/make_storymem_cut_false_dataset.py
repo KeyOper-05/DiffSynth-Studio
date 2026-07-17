@@ -346,9 +346,15 @@ def main() -> None:
         memory_paths.append(target)
 
     if not memory_paths:
-        target = memory_dir / "memory_000.png"
-        shutil.copyfile(input_image, target)
-        memory_paths.append(target)
+        default_memory_times = [
+            0.0,
+            max(0.0, current_start_seconds - 1.0 / source_fps),
+            current_start_seconds + (end_seconds - current_start_seconds) * 0.5,
+        ]
+        for idx, seconds in enumerate(default_memory_times):
+            target = memory_dir / f"memory_{idx:03d}.png"
+            ffmpeg_extract_frame(ffmpeg, video_path, target, seconds, args.width, args.height)
+            memory_paths.append(target)
 
     row = {
         "video": relative_to_base(video_out, output_dir),
