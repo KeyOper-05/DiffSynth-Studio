@@ -10,10 +10,12 @@ Expected input format::
       }
     }
 
-Each source video is sampled uniformly into a 4n+1-frame MP4.  Its first
-output frame is used as both ``input_image`` and the default one-frame
-StoryMem memory bank.  The output ``metadata.csv`` is directly compatible
-with the StoryMem MI2V cut=False training scripts in this repository.
+Each source video becomes an independent one-sample dataset directory so it
+can train an independent LoRA.  The source is sampled uniformly into a
+4n+1-frame MP4.  Its first output frame is used as both ``input_image`` and
+the default one-frame StoryMem memory bank.  Every sample directory contains
+its own ``metadata.csv`` and is directly compatible with the StoryMem MI2V
+cut=False training scripts in this repository.
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         default=Path("data/storymem_from_captions"),
-        help="Output dataset directory (default: data/storymem_from_captions).",
+        help="Root containing one dataset directory per video (default: data/storymem_from_captions).",
     )
     parser.add_argument("--metadata-name", default="metadata.csv")
     parser.add_argument(
@@ -78,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Replace files for samples that already exist and rewrite metadata.csv.",
+        help="Replace generated files inside existing per-video dataset directories.",
     )
     parser.add_argument(
         "--dry-run",
@@ -289,27 +291,37 @@ def main() -> int:
 
     items = load_caption_items(captions_path)
     output_dir = args.output.expanduser().resolve()
-    metadata_path = output_dir / args.metadata_name
     print(f"Validated {len(items)} samples from {captions_path}")
-    print(f"Output: {output_dir}")
+    print(f"Dataset root: {output_dir}")
     if args.dry_run:
         for item in items[:10]:
-            print(f"  {item.source_key} -> videos/{item.sample_name}.mp4")
+            print(f"  {item.source_key} -> {item.sample_name}/{args.metadata_name}")
         if len(items) > 10:
             print(f"  ... and {len(items) - 10} more")
         return 0
 
     ffmpeg = require_binary("ffmpeg")
     ffprobe = require_binary("ffprobe")
-    rows: list[dict[str, str]] = []
+    legacy_metadata = output_dir / args.metadata_name
+    if legacy_metadata.exists():
+        raise ValueError(
+            f"found a combined-dataset metadata file from the old layout: {legacy_metadata}. "
+            "Choose a new --output directory so each video remains an independent dataset."
+        )
+
+    dataset_dirs: list[Path] = []
     for index, item in enumerate(items, start=1):
-        video_out = output_dir / "videos" / f"{item.sample_name}.mp4"
-        input_image = output_dir / "input_images" / item.sample_name / "first_frame.png"
-        memory_image = output_dir / "memory" / item.sample_name / "memory_000.png"
-        existing = [path for path in (video_out, input_image, memory_image) if path.exists()]
+        dataset_dir = output_dir / item.sample_name
+        metadata_path = dataset_dir / args.metadata_name
+        video_out = dataset_dir / "videos" / f"{item.sample_name}.mp4"
+        input_image = dataset_dir / "input_images" / "first_frame.png"
+        memory_image = dataset_dir / "memory" / "memory_000.png"
+        existing = [
+            path for path in (metadata_path, video_out, input_image, memory_image) if path.exists()
+        ]
         if existing and not args.overwrite:
             raise FileExistsError(
-                f"sample {item.sample_name!r} already exists ({existing[0]}). "
+                f"dataset {item.sample_name!r} already exists ({existing[0]}). "
                 "Use --overwrite to replace generated files."
             )
 
@@ -327,26 +339,33 @@ def main() -> int:
         extract_first_frame(ffmpeg, video_out, input_image)
         memory_image.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(input_image, memory_image)
-        rows.append(
-            {
-                "video": relative_to_base(video_out, output_dir),
-                "prompt": item.caption,
-                "memory_images": json.dumps(
-                    [relative_to_base(memory_image, output_dir)], ensure_ascii=False
-                ),
-                "input_image": relative_to_base(input_image, output_dir),
-                "sample_mode": "mi2v_cut_false",
-            }
-        )
+        row = {
+            "video": relative_to_base(video_out, dataset_dir),
+            "prompt": item.caption,
+            "memory_images": json.dumps(
+                [relative_to_base(memory_image, dataset_dir)], ensure_ascii=False
+            ),
+            "input_image": relative_to_base(input_image, dataset_dir),
+            "sample_mode": "mi2v_cut_false",
+        }
+        write_metadata(metadata_path, [row])
+        dataset_dirs.append(dataset_dir)
+        print(f"      dataset: {dataset_dir}")
 
-    write_metadata(metadata_path, rows)
-    print(f"Done: {len(rows)} samples")
-    print(f"Metadata: {metadata_path}")
-    print("Training flags:")
-    print(f"  --dataset_base_path {output_dir}")
-    print(f"  --dataset_metadata_path {metadata_path}")
-    print("  --data_file_keys video,memory_images,input_image")
-    print("  --extra_inputs memory_images,input_image")
+    print(f"Done: {len(dataset_dirs)} independent one-video datasets")
+    print("Train one LoRA per dataset with:")
+    print(
+        "  bash examples/wanvideo/model_training/lora/"
+        "train_storymem_mi2v_cut_false_folder.sh <dataset_dir> <lora_output_dir>"
+    )
+    if dataset_dirs:
+        example = dataset_dirs[0]
+        print("Example:")
+        print(
+            "  bash examples/wanvideo/model_training/lora/"
+            f"train_storymem_mi2v_cut_false_folder.sh {example} "
+            f"models/motion_loras/{example.name}"
+        )
     return 0
 
 
