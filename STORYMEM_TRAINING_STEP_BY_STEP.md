@@ -194,7 +194,19 @@ backbone_low_noise.safetensors
 
 ## 5. 旧训练入口：按 action_name 输出到 DiffSynth models/train
 
-如果只想使用原始训练入口：
+推荐从仓库根目录使用统一入口：
+
+```bash
+bash train_storymem_cut_false.sh 6am
+```
+
+该入口会检查 `data/6am/metadata.csv`，然后顺序训练 high-noise 和 low-noise LoRA。如需修改 W&B project：
+
+```bash
+WANDB_PROJECT=my-storymem bash train_storymem_cut_false.sh 6am
+```
+
+底层原始训练入口仍可以直接调用：
 
 ```bash
 bash examples/wanvideo/model_training/lora/StoryMem-Wan2.2-MI2V-cut-false-A14B.sh 6am
