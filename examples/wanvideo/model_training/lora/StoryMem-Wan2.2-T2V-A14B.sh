@@ -1,3 +1,6 @@
+#!/usr/bin/env bash
+set -e
+
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export CPU_AFFINITY_CONF=1
 
@@ -6,8 +9,9 @@ if [ -z "$1" ]; then
   exit 1
 fi
 ACTION_NAME="$1"
+export WANDB_PROJECT="${WANDB_PROJECT:-StoryMem-LoRA}"
 
-accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
+WANDB_NAME="${ACTION_NAME}-t2v-high-noise" accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
   --dataset_base_path data/${ACTION_NAME} \
   --dataset_metadata_path data/${ACTION_NAME}/metadata.csv \
   --data_file_keys "video,memory_images" \
@@ -26,6 +30,8 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --extra_inputs "memory_images" \
   --max_timestep_boundary 0.1 \
   --min_timestep_boundary 0 \
+  --enable_wandb_log \
+  --wandb_project "${WANDB_PROJECT}" \
   --initialize_model_on_cpu
 # StoryMem boundary is timestep 900. DiffSynth training samples descending timesteps,
 # so high-noise t >= 900 corresponds to index fraction [0, 0.1).
@@ -33,7 +39,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
 # vram2: Do not find activation_checkpointing config in deepspeed config, skip initializing deepspeed gradient checkpointing. 可以优化试试
 
 
-accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
+WANDB_NAME="${ACTION_NAME}-t2v-low-noise" accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
   --dataset_base_path data/${ACTION_NAME} \
   --dataset_metadata_path data/${ACTION_NAME}/metadata.csv \
   --data_file_keys "video,memory_images" \
@@ -52,5 +58,7 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --extra_inputs "memory_images" \
   --max_timestep_boundary 1 \
   --min_timestep_boundary 0.1 \
+  --enable_wandb_log \
+  --wandb_project "${WANDB_PROJECT}" \
   --initialize_model_on_cpu
 # Low-noise t < 900 corresponds to index fraction [0.1, 1).

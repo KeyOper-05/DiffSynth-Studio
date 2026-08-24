@@ -24,8 +24,10 @@ mkdir -p "$OUTPUT_DIR"
 
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export CPU_AFFINITY_CONF=1
+export WANDB_PROJECT="${WANDB_PROJECT:-StoryMem-LoRA}"
+RUN_PREFIX="${WANDB_RUN_PREFIX:-$(basename "$OUTPUT_DIR")}"
 
-accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
+WANDB_NAME="${RUN_PREFIX}-mi2v-high-noise" accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
   --dataset_base_path "$DATASET_DIR" \
   --dataset_metadata_path "$METADATA_PATH" \
   --data_file_keys "video,memory_images,input_image" \
@@ -45,9 +47,11 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --training_scheduler_shift 4.0 \
   --max_timestep_boundary 0.308 \
   --min_timestep_boundary 0 \
+  --enable_wandb_log \
+  --wandb_project "${WANDB_PROJECT}" \
   --initialize_model_on_cpu
 
-accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
+WANDB_NAME="${RUN_PREFIX}-mi2v-low-noise" accelerate launch --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml examples/wanvideo/model_training/train.py \
   --dataset_base_path "$DATASET_DIR" \
   --dataset_metadata_path "$METADATA_PATH" \
   --data_file_keys "video,memory_images,input_image" \
@@ -67,6 +71,8 @@ accelerate launch --config_file examples/wanvideo/model_training/full/accelerate
   --training_scheduler_shift 4.0 \
   --max_timestep_boundary 1 \
   --min_timestep_boundary 0.308 \
+  --enable_wandb_log \
+  --wandb_project "${WANDB_PROJECT}" \
   --initialize_model_on_cpu
 
 if [ ! -f "$HIGH_EXPORT" ]; then
