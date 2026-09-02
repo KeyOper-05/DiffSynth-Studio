@@ -14,6 +14,11 @@ METADATA_PATH="$DATASET_DIR/metadata.csv"
 HIGH_OUTPUT_DIR="$OUTPUT_DIR/diffsynth_high_noise_lora"
 LOW_OUTPUT_DIR="$OUTPUT_DIR/diffsynth_low_noise_lora"
 NUM_EPOCHS="${NUM_EPOCHS:-5}"
+HEIGHT="${HEIGHT:-480}"
+WIDTH="${WIDTH:-832}"
+NUM_FRAMES="${NUM_FRAMES:-49}"
+DATASET_REPEAT="${DATASET_REPEAT:-100}"
+LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 LAST_EPOCH=$((NUM_EPOCHS - 1))
 HIGH_EXPORT="$HIGH_OUTPUT_DIR/epoch-${LAST_EPOCH}.safetensors"
 LOW_EXPORT="$LOW_OUTPUT_DIR/epoch-${LAST_EPOCH}.safetensors"
@@ -60,12 +65,12 @@ WANDB_NAME="${RUN_PREFIX}-${RUN_KIND}-high-noise" accelerate launch --config_fil
   --dataset_base_path "$DATASET_DIR" \
   --dataset_metadata_path "$METADATA_PATH" \
   --data_file_keys "$DATA_FILE_KEYS" \
-  --height 480 \
-  --width 832 \
-  --num_frames 49 \
-  --dataset_repeat 100 \
+  --height "$HEIGHT" \
+  --width "$WIDTH" \
+  --num_frames "$NUM_FRAMES" \
+  --dataset_repeat "$DATASET_REPEAT" \
   --model_paths "[[\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"],\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\",\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"]" \
-  --learning_rate 1e-4 \
+  --learning_rate "$LEARNING_RATE" \
   --num_epochs "$NUM_EPOCHS" \
   --remove_prefix_in_ckpt "pipe.dit." \
   --output_path "$HIGH_OUTPUT_DIR" \
@@ -84,12 +89,12 @@ WANDB_NAME="${RUN_PREFIX}-${RUN_KIND}-low-noise" accelerate launch --config_file
   --dataset_base_path "$DATASET_DIR" \
   --dataset_metadata_path "$METADATA_PATH" \
   --data_file_keys "$DATA_FILE_KEYS" \
-  --height 480 \
-  --width 832 \
-  --num_frames 49 \
-  --dataset_repeat 100 \
+  --height "$HEIGHT" \
+  --width "$WIDTH" \
+  --num_frames "$NUM_FRAMES" \
+  --dataset_repeat "$DATASET_REPEAT" \
   --model_paths "[[\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"],\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\",\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"]" \
-  --learning_rate 1e-4 \
+  --learning_rate "$LEARNING_RATE" \
   --num_epochs "$NUM_EPOCHS" \
   --remove_prefix_in_ckpt "pipe.dit." \
   --output_path "$LOW_OUTPUT_DIR" \
