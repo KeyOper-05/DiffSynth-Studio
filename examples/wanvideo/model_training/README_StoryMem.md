@@ -96,12 +96,14 @@ python examples/wanvideo/model_training/scripts/make_storymem_dataset.py \
 ```bash
 python examples/wanvideo/model_training/scripts/make_storymem_cut_false_dataset.py \
   --video /path/to/full_or_adjacent_shots.mp4 \
+  --memory-start 00:00:00.000 \
   --prev-end 00:00:05.000 \
   --start 00:00:05.000 \
   --end 00:00:10.000 \
   --prompt "The character continues walking into the room." \
   --output data/storymem_cut_false_mi2v \
   --num-frames 49 \
+  --num-memory-images 3 \
   --fps 16 \
   --width 832 \
   --height 480
@@ -121,7 +123,7 @@ bash examples/wanvideo/model_training/scripts/make_storymem_cut_false_dataset.sh
 video,prompt,memory_images,input_image,sample_mode
 ```
 
-其中 `input_image` 是上一 shot 的 `previous_last_frame.png`，训练视频的第 0 帧也会使用同一张图；第 1 帧开始才是当前 shot 的均匀抽帧。脚本会读取源视频 fps，并自动从 `--prev-end` 的次帧开始抽当前 shot，避免 `--prev-end == --start` 时重复包含上一 shot last frame。默认不传 `--memory-time` 或 `--memory-frame` 时，`memory_images` 也会指向这张 previous last frame。
+其中 `[--memory-start, --prev-end)` 是独立的 memory-only 历史区间：默认在区间内均匀抽取 `--num-memory-images` 张图，这些帧不会进入当前 shot 的训练视频。`input_image` 是 `--prev-end` 处的 `previous_last_frame.png`，训练视频第 0 帧使用同一张图；第 1 帧起严格从分界点后的下一个源视频帧开始。`--start` 和 `--prev-end` 必须指向同一分界帧（允许半个源帧的误差）。手动传入的 `--memory-time` 也必须落在 memory-only 区间内。
 
 对应训练入口：
 

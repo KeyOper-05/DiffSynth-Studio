@@ -53,12 +53,14 @@ data/party/
 ```bash
 python examples/wanvideo/model_training/scripts/make_storymem_cut_false_dataset.py \
   --video data/6am.mp4 \
-  --prev-end "00:00:00.000" \
-  --start "00:00:00.000" \
+  --memory-start "00:00:00.000" \
+  --prev-end "00:00:00.500" \
+  --start "00:00:00.500" \
   --end "00:00:04.000" \
   --prompt "A man wakes up in bed, shifts restlessly, then grabs a pillow, rolls onto his side, and pulls it over his head." \
   --output data/6am \
   --num-frames 49 \
+  --num-memory-images 3 \
   --fps 16 \
   --width 832 \
   --height 480 \
@@ -77,12 +79,14 @@ bash examples/wanvideo/model_training/scripts/make_storymem_cut_false_dataset.sh
 参数含义：
 
 - `--video`：源视频路径。
-- `--prev-end`：上一 shot 最后一帧的时间。
-- `--start`：当前 shot 开始时间。
+- `--memory-start`：memory-only 历史片段的开始时间。
+- `--prev-end`：memory-only 片段结束且上一 shot 最后一帧的时间。
+- `--start`：当前 shot 的分界时间；cut=false 时应与 `--prev-end` 指向同一帧。
 - `--end`：当前 shot 结束时间。
 - `--prompt`：当前 shot 的训练文本描述。
 - `--output`：输出训练样本目录，通常是 `data/<action_name>`。
 - `--num-frames`：训练视频帧数，当前训练脚本默认用 `49`。
+- `--num-memory-images`：在 memory-only 片段内均匀抽取的 memory 图片数，默认为 `3`。
 - `--fps`：输出训练视频 fps，当前 StoryMem/Wan 设置使用 `16`。
 - `--width`、`--height`：训练分辨率，当前脚本使用 `832x480`。
 
@@ -246,12 +250,14 @@ cp models/train/6am_mi2v_cut_false_low_noise_lora/epoch-4.safetensors \
 ```bash
 python examples/wanvideo/model_training/scripts/make_storymem_cut_false_dataset.py \
   --video data/flip.mp4 \
-  --prev-end "00:00:00.000" \
-  --start "00:00:00.000" \
+  --memory-start "00:00:00.000" \
+  --prev-end "00:00:00.500" \
+  --start "00:00:00.500" \
   --end "00:00:04.000" \
   --prompt "A person performs a flip." \
   --output data/flip \
   --num-frames 49 \
+  --num-memory-images 3 \
   --fps 16 \
   --width 832 \
   --height 480 \

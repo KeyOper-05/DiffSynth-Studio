@@ -3,8 +3,9 @@
 
 The output video is constructed as:
 
+    memory images: sampled only from [--memory-start, --prev-end)
     frame 0: previous shot last frame, sampled at --prev-end
-    frame 1..N-1: current shot frames, sampled evenly from --start to --end
+    frame 1..N-1: current shot frames, sampled strictly after --prev-end
 
 The generated metadata matches the DiffSynth StoryMem training path with:
 
@@ -120,6 +121,49 @@ def evenly_spaced_times(start_seconds: float, end_seconds: float, num_frames: in
         return [start_seconds]
     stride = (end_seconds - start_seconds) / (num_frames - 1)
     return [start_seconds + i * stride for i in range(num_frames)]
+
+
+def interval_center_times(start_seconds: float, end_seconds: float, count: int) -> list[float]:
+    """Sample deterministic timestamps strictly inside a half-open memory interval."""
+    if end_seconds <= start_seconds:
+        raise ValueError("--prev-end must be greater than --memory-start")
+    if count <= 0:
+        raise ValueError("--num-memory-images must be positive")
+    stride = (end_seconds - start_seconds) / count
+    return [start_seconds + (index + 0.5) * stride for index in range(count)]
+
+
+def validate_memory_times(times: list[float], start_seconds: float, end_seconds: float) -> None:
+    for seconds in times:
+        if not start_seconds <= seconds < end_seconds:
+            raise ValueError(
+                f"--memory-time {seconds:.6f} is outside the memory-only interval "
+                f"[{start_seconds:.6f}, {end_seconds:.6f})."
+            )
+
+
+def validate_continuous_timeline(
+    memory_start_seconds: float,
+    prev_end_seconds: float,
+    start_seconds: float,
+    end_seconds: float,
+    source_fps: float,
+) -> float:
+    """Validate a cut=False timeline and return the first supervised-frame time."""
+    if source_fps <= 0:
+        raise ValueError("source fps must be positive")
+    if prev_end_seconds <= memory_start_seconds:
+        raise ValueError("--prev-end must be greater than --memory-start")
+    frame_duration = 1.0 / source_fps
+    if abs(start_seconds - prev_end_seconds) > frame_duration / 2:
+        raise ValueError(
+            "cut=False MI2V requires --start and --prev-end to identify the same boundary "
+            "frame (difference must be at most half a source-video frame)."
+        )
+    current_start_seconds = prev_end_seconds + frame_duration
+    if current_start_seconds >= end_seconds:
+        raise ValueError("--end must be after the first source-video frame following --prev-end")
+    return current_start_seconds
 
 
 def ffmpeg_extract_frame(
@@ -238,8 +282,9 @@ def append_metadata(metadata_path: Path, row: dict[str, str]) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a cut=False StoryMem MI2V dataset sample from one source video.")
     parser.add_argument("--video", required=True, type=Path, help="Source video containing previous-shot end and current-shot frames.")
-    parser.add_argument("--prev-end", required=True, help="Time of the previous shot's last frame.")
-    parser.add_argument("--start", required=True, help="Current shot start time.")
+    parser.add_argument("--memory-start", required=True, help="Start of the memory-only source interval.")
+    parser.add_argument("--prev-end", required=True, help="End of the memory-only interval and time of the MI2V boundary frame.")
+    parser.add_argument("--start", required=True, help="Current-shot boundary time; for cut=False this must match --prev-end.")
     parser.add_argument("--end", required=True, help="Current shot end time.")
     parser.add_argument("--output", type=Path, default=Path("data/storymem_cut_false_mi2v"), help="Dataset base directory.")
     parser.add_argument("--metadata-name", default="metadata.csv", help="Metadata filename under --output.")
@@ -251,17 +296,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=None, help="Optional output video height.")
     parser.add_argument("--quality", type=int, default=8, help="MP4 quality, usually 1-10.")
     parser.add_argument(
+        "--num-memory-images",
+        type=int,
+        default=3,
+        help="Number of images sampled uniformly inside [--memory-start, --prev-end) when no explicit memory is supplied.",
+    )
+    parser.add_argument(
         "--memory-frame",
         action="append",
         default=[],
         type=Path,
-        help="Memory image path. Can be provided multiple times.",
+        help="External historical memory image path. Can be repeated; the caller must ensure it is not from the target shot.",
     )
     parser.add_argument(
         "--memory-time",
         action="append",
         default=[],
-        help="Time in source video to extract as a memory image. Can be provided multiple times.",
+        help="Time in the memory-only interval to extract as a memory image. Can be repeated.",
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite generated sample files if --sample-name already exists.")
     return parser.parse_args()
@@ -279,20 +330,31 @@ def main() -> None:
     if not 1 <= args.quality <= 10:
         raise ValueError("--quality must be between 1 and 10")
 
+    memory_start_seconds = parse_time(args.memory_start)
     prev_end_seconds = parse_time(args.prev_end)
     start_seconds = parse_time(args.start)
     end_seconds = parse_time(args.end)
-    if prev_end_seconds > start_seconds:
-        raise ValueError("--prev-end must be less than or equal to --start")
-    if end_seconds <= start_seconds:
-        raise ValueError("--end must be greater than --start")
+    if args.num_memory_images <= 0:
+        raise ValueError("--num-memory-images must be positive")
 
     ffmpeg = require_binary("ffmpeg")
     ffprobe = require_binary("ffprobe")
     source_fps = probe_video_fps(ffprobe, video_path)
-    current_start_seconds = max(start_seconds, prev_end_seconds + 1.0 / source_fps)
-    if current_start_seconds >= end_seconds:
-        raise ValueError("--end must be after the first current-shot frame following --prev-end")
+    current_start_seconds = validate_continuous_timeline(
+        memory_start_seconds,
+        prev_end_seconds,
+        start_seconds,
+        end_seconds,
+        source_fps,
+    )
+    explicit_memory_times = [parse_time(value) for value in args.memory_time]
+    validate_memory_times(explicit_memory_times, memory_start_seconds, prev_end_seconds)
+    explicit_memory_frames = [path.expanduser().resolve() for path in args.memory_frame]
+    for source in explicit_memory_frames:
+        if not source.exists():
+            raise FileNotFoundError(source)
+        if source.suffix.lower() not in IMAGE_EXTENSIONS:
+            raise ValueError(f"unsupported memory image extension: {source.suffix}")
     num_frames = ensure_num_frames(args.num_frames)
     output_fps = args.fps if args.fps is not None else num_frames / (end_seconds - start_seconds)
     output_dir = args.output.expanduser().resolve()
@@ -330,28 +392,23 @@ def main() -> None:
 
     memory_dir.mkdir(parents=True, exist_ok=True)
     memory_paths: list[Path] = []
-    for idx, memory_frame in enumerate(args.memory_frame):
-        source = memory_frame.expanduser().resolve()
-        if not source.exists():
-            raise FileNotFoundError(source)
-        if source.suffix.lower() not in IMAGE_EXTENSIONS:
-            raise ValueError(f"unsupported memory image extension: {source.suffix}")
+    for idx, source in enumerate(explicit_memory_frames):
         target = memory_dir / f"memory_{idx:03d}{source.suffix.lower()}"
         shutil.copyfile(source, target)
         memory_paths.append(target)
 
-    for idx, memory_time in enumerate(args.memory_time, start=len(memory_paths)):
+    for idx, seconds in enumerate(explicit_memory_times, start=len(memory_paths)):
         target = memory_dir / f"memory_{idx:03d}.png"
-        ffmpeg_extract_frame(ffmpeg, video_path, target, parse_time(memory_time), args.width, args.height)
+        ffmpeg_extract_frame(ffmpeg, video_path, target, seconds, args.width, args.height)
         memory_paths.append(target)
 
     if not memory_paths:
-        default_memory_times = [
-            0.0,
-            max(0.0, current_start_seconds - 1.0 / source_fps),
-            current_start_seconds + (end_seconds - current_start_seconds) * 0.5,
-        ]
-        for idx, seconds in enumerate(default_memory_times):
+        memory_times = interval_center_times(
+            memory_start_seconds,
+            prev_end_seconds,
+            args.num_memory_images,
+        )
+        for idx, seconds in enumerate(memory_times):
             target = memory_dir / f"memory_{idx:03d}.png"
             ffmpeg_extract_frame(ffmpeg, video_path, target, seconds, args.width, args.height)
             memory_paths.append(target)
@@ -370,6 +427,7 @@ def main() -> None:
     print(f"Video sample: {video_out}")
     print(f"Input image: {input_image}")
     print(f"Memory images: {', '.join(str(path) for path in memory_paths)}")
+    print(f"Memory-only interval: [{memory_start_seconds:.6f}, {prev_end_seconds:.6f})")
     print(f"Current shot sampling starts at: {current_start_seconds:.6f}s")
     print("Training flags:")
     print(f"  --dataset_base_path {output_dir}")
