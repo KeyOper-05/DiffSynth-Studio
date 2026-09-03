@@ -16,6 +16,9 @@
 log*.txt
 AGENTS.md
 
+# dotenv
+.env
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

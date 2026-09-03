@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+set -a
+source .env
+set +a
+
 cd "$(dirname "$0")"
 
 ACTION_NAME="${1:-}"
