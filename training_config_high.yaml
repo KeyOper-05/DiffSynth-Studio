@@ -1,0 +1,29 @@
+# === Experiment Specific Configs ===
+action_name: dance
+learning_rate: 1e-4
+num_epochs: 5
+dataset_repeat: 300
+lora_rank: 128
+wandb_project: StoryMem-LoRA
+output_path: "${lora_base}/${action_name}/${action_name}_mi2v_cut_false_high_noise_lora"
+
+# === Paths ===
+dataset_base: /home/ma-user/modelarts/user-job-dir/lhk_data/A_TrainingSamples/s1_storymem_dataset
+dataset_metadata_path: ${dataset_base}/${action_name}/metadata.csv
+lora_base: /home/ma-user/modelarts/user-job-dir/lhk_data/A_TrainingSamples/s2_diffsynth_loras
+
+# === Default Settings ===
+data_file_keys: "video,memory_images,input_image"
+height: 480
+width: 832
+num_frames: 49
+model_paths: "[[\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"],\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\",\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"]"
+remove_prefix_in_ckpt: "pipe.dit."
+lora_base_model: "dit"
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+extra_inputs: "memory_images,input_image"
+
+# === StoryMem Specific ===
+training_scheduler_shift: 4.0
+enable_wandb_log: True
+initialize_model_on_cpu: True

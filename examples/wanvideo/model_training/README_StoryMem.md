@@ -132,6 +132,14 @@ cd DiffSynth-Studio
 bash examples/wanvideo/model_training/lora/StoryMem-Wan2.2-MI2V-cut-false-A14B.sh flip
 ```
 
+该入口默认以 49 帧训练，但数据中的 49 帧是从完整动作区间均匀抽取的，因此训练时启用：
+
+```bash
+--temporal_rope_target_num_frames 81
+```
+
+VAE 时间压缩后的 13 个当前镜头 token 会使用 `linspace(0, 20, 13)` 的 temporal RoPE 坐标，恢复它们在 81 帧时间范围中的相对位置。StoryMem memory token 仍使用原有负时间坐标；如果使用 `reference_latents`，reference 也按 StoryMem 的前缀方式使用 `-5`，真实视频仍从 0 开始。可用环境变量 `TEMPORAL_ROPE_TARGET_NUM_FRAMES` 修改目标长度；直接调用通用 `train.py` 时不传该参数则完全保留连续 RoPE 行为。
+
 这个脚本默认读取：
 
 ```text

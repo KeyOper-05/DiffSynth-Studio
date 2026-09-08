@@ -16,7 +16,7 @@ from ..diffusion import FlowMatchScheduler
 from ..core import ModelConfig, gradient_checkpoint_forward
 from ..diffusion.base_pipeline import BasePipeline, PipelineUnit
 
-from ..models.wan_video_dit import WanModel, sinusoidal_embedding_1d
+from ..models.wan_video_dit import WanModel, sinusoidal_embedding_1d, temporal_rope_from_positions
 from ..models.wan_video_dit_s2v import rope_precompute
 from ..models.wan_video_text_encoder import WanTextEncoder, HuggingfaceTokenizer
 from ..models.wan_video_vae import WanVideoVAE
@@ -1408,6 +1408,79 @@ def storymem_select_temporal_freqs(freqs_0, positions):  # Signature: (freqs_0: 
     return freqs  # Return [F,D] temporal RoPE table aligned with the patched temporal length.
 
 
+def sparse_temporal_rope_freqs(freqs_0, latent_frames, target_num_frames):
+    """Spread sparse training latents over a target 4n+1-frame Wan timeline."""
+    if target_num_frames < 1 or target_num_frames % 4 != 1:
+        raise ValueError(
+            f"temporal_rope_target_num_frames must be 4n+1, got {target_num_frames}."
+        )
+    if latent_frames < 1:
+        raise ValueError(f"latent_frames must be positive, got {latent_frames}.")
+    target_latent_frames = (target_num_frames - 1) // 4 + 1
+    if target_latent_frames < latent_frames:
+        raise ValueError(
+            "temporal_rope_target_num_frames describes a shorter timeline than "
+            f"the training latent sequence ({target_latent_frames} < {latent_frames})."
+        )
+    if target_latent_frames > freqs_0.shape[0]:
+        raise ValueError(
+            f"Target temporal RoPE length {target_latent_frames} exceeds the "
+            f"precomputed table length {freqs_0.shape[0]}."
+        )
+    positions = torch.linspace(
+        0,
+        target_latent_frames - 1,
+        latent_frames,
+        device=freqs_0.device,
+        dtype=torch.float64,
+    )
+    return temporal_rope_from_positions(freqs_0, positions)
+
+
+def build_temporal_rope_freqs(
+    freqs_0,
+    total_latent_frames,
+    memory_size=0,
+    reference_size=0,
+    target_num_frames=None,
+):
+    """Build temporal RoPE for optional StoryMem-style prefixes and video."""
+    if memory_size > 0 and reference_size > 0:
+        raise ValueError("StoryMem memory and reference_latents cannot share the temporal prefix.")
+    if reference_size not in (0, 1):
+        raise ValueError(f"reference_size must be 0 or 1, got {reference_size}.")
+
+    # Preserve the original FunReference coordinate layout unless adaptive
+    # sparse-video coordinates were explicitly requested.
+    if reference_size > 0 and target_num_frames is None:
+        return freqs_0[:total_latent_frames]
+
+    prefix_size = memory_size + reference_size
+    video_latent_frames = total_latent_frames - prefix_size
+    if video_latent_frames < 1:
+        raise ValueError(
+            f"Temporal prefix ({prefix_size}) must leave at least one video latent frame."
+        )
+
+    prefix_freqs = None
+    if prefix_size > 0:
+        prefix_positions = torch.arange(
+            -prefix_size * MEMORY_ROPE_SHIFT,
+            0,
+            MEMORY_ROPE_SHIFT,
+            device=freqs_0.device,
+        ).long()
+        prefix_freqs = storymem_select_temporal_freqs(freqs_0, prefix_positions)
+
+    if target_num_frames is None:
+        video_freqs = freqs_0[:video_latent_frames]
+    else:
+        video_freqs = sparse_temporal_rope_freqs(
+            freqs_0, video_latent_frames, target_num_frames
+        )
+    return video_freqs if prefix_freqs is None else torch.cat([prefix_freqs, video_freqs], dim=0)
+
+
 def model_fn_wan_video(
     dit: WanModel,
     motion_controller: WanMotionControllerModel = None,
@@ -1447,9 +1520,12 @@ def model_fn_wan_video(
     music_feature = None,
     skip_9th_layer: bool = False,
     memory_size: int = 0,  # Number of StoryMem memory latent frames prepended on time dim; 0 keeps standard DiffSynth RoPE.
+    temporal_rope_target_num_frames: Optional[int] = None,
     **kwargs,
 ):
     if sliding_window_size is not None and sliding_window_stride is not None:
+        if temporal_rope_target_num_frames is not None:
+            raise ValueError("Sparse temporal RoPE is not supported with temporal sliding-window denoising.")
         model_kwargs = dict(
             dit=dit,
             motion_controller=motion_controller,
@@ -1567,17 +1643,14 @@ def model_fn_wan_video(
         reference_latents = dit.ref_conv(reference_latents).flatten(2).transpose(1, 2)
         x = torch.concat([reference_latents, x], dim=1)
         f += 1
-
-    if memory_size > 0:  # StoryMem path: the first M temporal patches are memory tokens with negative RoPE coordinates.
-        if memory_size >= f:  # A valid sample must contain at least one current-shot latent frame after the memory prefix.
-            raise ValueError(f"memory_size ({memory_size}) must be smaller than patched temporal length ({f}).")  # Fail with shape context.
-        pos_t = torch.cat([  # torch.cat(list, dim=0) joins memory positions and generated-shot positions into one [F] index tensor.
-            torch.arange(-memory_size * MEMORY_ROPE_SHIFT, 0, MEMORY_ROPE_SHIFT, device=dit.freqs[0].device),  # torch.arange(start,end,step): [-M*5,...,-5].
-            torch.arange(0, f - memory_size, device=dit.freqs[0].device),  # torch.arange(0,T): generated-shot positions [0,...,T-1].
-        ]).long()  # Tensor.long() converts position tensor to int64 for tensor indexing.
-        freqs_t = storymem_select_temporal_freqs(dit.freqs[0], pos_t)  # Convert signed StoryMem positions into complex RoPE rows [F,D_t].
-    else:  # Standard DiffSynth path for all existing Wan variants.
-        freqs_t = dit.freqs[0][:f]  # Slice first F temporal RoPE rows, preserving old behavior exactly.
+    reference_size = int(reference_latents is not None)
+    freqs_t = build_temporal_rope_freqs(
+        dit.freqs[0],
+        total_latent_frames=f,
+        memory_size=memory_size,
+        reference_size=reference_size,
+        target_num_frames=temporal_rope_target_num_frames,
+    )
 
     freqs = torch.cat([
         freqs_t.view(f, 1, 1, -1).expand(f, h, w, -1),

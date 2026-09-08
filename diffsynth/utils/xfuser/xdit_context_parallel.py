@@ -32,32 +32,54 @@ def sinusoidal_embedding_1d(dim, position):
     return x.to(position.dtype)
 
 def pad_freqs(original_tensor, target_len):
-    seq_len, s1, s2 = original_tensor.shape
+    seq_len = original_tensor.shape[0]
+    if seq_len >= target_len:
+        return original_tensor
+
     pad_size = target_len - seq_len
-    original_tensor_device = original_tensor.device
-    if original_tensor.device == "npu":
-        original_tensor = original_tensor.cpu()
+    if original_tensor.is_complex():
+        # NPU does not support padding/cat directly on complex tensors. Keep
+        # the operation in the real representation and pad with the rotary
+        # identity value 1 + 0j.
+        original_tensor_real = torch.view_as_real(original_tensor)
+        padding_real = torch.zeros(
+            pad_size,
+            *original_tensor_real.shape[1:],
+            dtype=original_tensor_real.dtype,
+            device=original_tensor_real.device,
+        )
+        padding_real[..., 0] = 1
+        padded_real = torch.cat([original_tensor_real, padding_real], dim=0)
+        return torch.view_as_complex(padded_real.contiguous())
+
     padding_tensor = torch.ones(
         pad_size,
-        s1,
-        s2,
+        *original_tensor.shape[1:],
         dtype=original_tensor.dtype,
-        device=original_tensor.device)
-    padded_tensor = torch.cat([original_tensor, padding_tensor], dim=0).to(device=original_tensor_device)
-    return padded_tensor
+        device=original_tensor.device,
+    )
+    return torch.cat([original_tensor, padding_tensor], dim=0)
     
 def rope_apply(x, freqs, num_heads):
     x = rearrange(x, "b s (n d) -> b s n d", n=num_heads)
     s_per_rank = x.shape[1]
 
-    x_out = torch.view_as_complex(x.to(torch.float64).reshape(
-        x.shape[0], x.shape[1], x.shape[2], -1, 2))
+    # Match StoryMem's sequence-parallel RoPE path: float32 becomes
+    # complex64, avoiding unsupported complex128 operations on NPU.
+    x_out = torch.view_as_complex(x.to(torch.float32).reshape(
+        x.shape[0], x.shape[1], x.shape[2], -1, 2).contiguous())
 
     sp_size = get_sequence_parallel_world_size()
     sp_rank = get_sequence_parallel_rank()
+    # Convert complex128 frequencies through their real representation. This
+    # avoids asking NPU to cast a complex tensor directly, while preserving
+    # the real/imaginary pairs exactly at float32 precision.
+    if freqs.dtype != torch.complex64:
+        freqs = torch.view_as_complex(
+            torch.view_as_real(freqs).to(torch.float32).contiguous()
+        )
     freqs = pad_freqs(freqs, s_per_rank * sp_size)
     freqs_rank = freqs[(sp_rank * s_per_rank):((sp_rank + 1) * s_per_rank), :, :]
-    freqs_rank = freqs_rank.to(torch.complex64) if freqs_rank.device.type == "npu" else freqs_rank
     x_out = torch.view_as_real(x_out * freqs_rank).flatten(2)
     return x_out.to(x.dtype)
 

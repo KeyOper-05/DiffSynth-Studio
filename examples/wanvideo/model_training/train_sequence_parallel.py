@@ -170,6 +170,11 @@ def main():
         help="Base seed shared by all ranks; incremented once per training forward.",
     )
     args = parser.parse_args()
+    if args.temporal_rope_target_num_frames is not None:
+        if args.temporal_rope_target_num_frames < 1 or args.temporal_rope_target_num_frames % 4 != 1:
+            parser.error("--temporal_rope_target_num_frames must be a positive 4n+1 frame count.")
+        if args.temporal_rope_target_num_frames < args.num_frames:
+            parser.error("--temporal_rope_target_num_frames must be at least --num_frames.")
 
     standard_train._enable_checkpoint_tracebacks(
         args.debug_checkpoints, args.debug_checkpoint_trace_after
@@ -261,6 +266,7 @@ def main():
         max_timestep_boundary=args.max_timestep_boundary,
         min_timestep_boundary=args.min_timestep_boundary,
         training_scheduler_shift=args.training_scheduler_shift,
+        temporal_rope_target_num_frames=args.temporal_rope_target_num_frames,
         debug_memory=args.debug_memory,
         debug_memory_units=args.debug_memory_units,
         debug_memory_tensors_topk=args.debug_memory_tensors_topk,

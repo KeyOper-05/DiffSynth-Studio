@@ -11,6 +11,7 @@ fi
 ACTION_NAME="$1"
 TRAINING_SCHEDULER_SHIFT="${TRAINING_SCHEDULER_SHIFT:-4.0}"
 TIMESTEP_BOUNDARY="${TIMESTEP_BOUNDARY:-0.308}"
+TEMPORAL_ROPE_TARGET_NUM_FRAMES="${TEMPORAL_ROPE_TARGET_NUM_FRAMES:-81}"
 SP_SIZE="${SP_SIZE:-8}"
 SP_SEED="${SP_SEED:-0}"
 export WANDB_PROJECT="${WANDB_PROJECT:-StoryMem-LoRA-USP}"
@@ -24,6 +25,7 @@ WANDB_NAME="${ACTION_NAME}-mi2v-high-noise-usp" accelerate launch --config_file 
   --height 480 \
   --width 832 \
   --num_frames 49 \
+  --temporal_rope_target_num_frames "${TEMPORAL_ROPE_TARGET_NUM_FRAMES}" \
   --dataset_repeat 100 \
   --model_paths "[[\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"],\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\",\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"]" \
   --learning_rate 1e-4 \
@@ -53,6 +55,7 @@ WANDB_NAME="${ACTION_NAME}-mi2v-low-noise-usp" accelerate launch --config_file e
   --height 480 \
   --width 832 \
   --num_frames 49 \
+  --temporal_rope_target_num_frames "${TEMPORAL_ROPE_TARGET_NUM_FRAMES}" \
   --dataset_repeat 100 \
   --model_paths "[[\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"],\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\",\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"]" \
   --learning_rate 1e-4 \

@@ -91,6 +91,23 @@ def precompute_freqs_cis(dim: int, end: int = 1024, theta: float = 10000.0):
     return freqs_cis
 
 
+def temporal_rope_from_positions(freqs_cis: torch.Tensor, positions: torch.Tensor):
+    """Evaluate a precomputed temporal RoPE basis at arbitrary coordinates.
+
+    ``freqs_cis[1]`` stores ``exp(i * omega)`` for every rotary channel.  Wan's
+    largest omega is 1 radian, so its principal angle recovers omega exactly.
+    Reconstructing ``exp(i * position * omega)`` keeps fractional-coordinate
+    embeddings on the unit circle, unlike linear interpolation between complex
+    table entries.
+    """
+    if freqs_cis.ndim != 2 or freqs_cis.shape[0] < 2:
+        raise ValueError("Temporal RoPE table must have shape [L, D] with L >= 2.")
+    positions = positions.to(device=freqs_cis.device, dtype=torch.float64)
+    angular_frequency = torch.angle(freqs_cis[1]).to(torch.float64)
+    phase = positions[:, None] * angular_frequency[None, :]
+    return torch.polar(torch.ones_like(phase), phase).to(freqs_cis.dtype)
+
+
 def rope_apply(x, freqs, num_heads):
     x = rearrange(x, "b s (n d) -> b s n d", n=num_heads)
     x_out = torch.view_as_complex(x.to(torch.float64).reshape(

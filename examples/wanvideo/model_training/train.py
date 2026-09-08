@@ -153,6 +153,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         max_timestep_boundary=1.0,
         min_timestep_boundary=0.0,
         training_scheduler_shift=None,
+        temporal_rope_target_num_frames=None,
         debug_memory=False,
         debug_memory_units=False,
         debug_memory_tensors_topk=20,
@@ -224,6 +225,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         self.max_timestep_boundary = max_timestep_boundary
         self.min_timestep_boundary = min_timestep_boundary
         self.training_scheduler_shift = training_scheduler_shift
+        self.temporal_rope_target_num_frames = temporal_rope_target_num_frames
         _debug_checkpoint(debug_checkpoints, "WanTrainingModule:init:done", init_start, device)
 
     def _debug_memory_snapshot(self, tag, inputs=None):
@@ -316,6 +318,16 @@ class WanTrainingModule(DiffusionTrainingModule):
             "max_timestep_boundary": self.max_timestep_boundary,
             "min_timestep_boundary": self.min_timestep_boundary,
         }
+        if self.temporal_rope_target_num_frames is not None:
+            source_num_frames = len(data["video"])
+            if source_num_frames % 4 != 1:
+                raise ValueError(f"Sparse temporal RoPE requires 4n+1 training frames, got {source_num_frames}.")
+            if self.temporal_rope_target_num_frames < source_num_frames:
+                raise ValueError(
+                    "temporal_rope_target_num_frames must be at least the sampled video length "
+                    f"({self.temporal_rope_target_num_frames} < {source_num_frames})."
+                )
+            inputs_shared["temporal_rope_target_num_frames"] = self.temporal_rope_target_num_frames
         inputs_shared = self.parse_extra_inputs(data, self.extra_inputs, inputs_shared)
         return inputs_shared, inputs_posi, inputs_nega
     
@@ -346,6 +358,7 @@ def wan_parser():
     parser.add_argument("--max_timestep_boundary", type=float, default=1.0, help="Max timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
     parser.add_argument("--min_timestep_boundary", type=float, default=0.0, help="Min timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
     parser.add_argument("--training_scheduler_shift", type=float, default=None, help="Optional Wan flow-match scheduler shift used to build the training timestep table.")
+    parser.add_argument("--temporal_rope_target_num_frames", type=int, default=None, help="Spread sampled training frames over this 4n+1-frame temporal RoPE timeline.")
     parser.add_argument("--initialize_model_on_cpu", default=False, action="store_true", help="Whether to initialize models on CPU.")
     parser.add_argument("--framewise_decoding", default=False, action="store_true", help="Enable it if this model is a WanToDance global model.")
     parser.add_argument("--debug_memory", default=False, action="store_true", help="Print CUDA/NPU memory allocator stats during each training forward.")
@@ -361,6 +374,11 @@ if __name__ == "__main__":
     script_start = time.time()
     parser = wan_parser()
     args = parser.parse_args()
+    if args.temporal_rope_target_num_frames is not None:
+        if args.temporal_rope_target_num_frames < 1 or args.temporal_rope_target_num_frames % 4 != 1:
+            parser.error("--temporal_rope_target_num_frames must be a positive 4n+1 frame count.")
+        if args.temporal_rope_target_num_frames < args.num_frames:
+            parser.error("--temporal_rope_target_num_frames must be at least --num_frames.")
     _enable_checkpoint_tracebacks(args.debug_checkpoints, args.debug_checkpoint_trace_after)
     _debug_checkpoint(args.debug_checkpoints, "main:args_parsed", script_start)
     accelerator = accelerate.Accelerator(
@@ -425,6 +443,7 @@ if __name__ == "__main__":
         max_timestep_boundary=args.max_timestep_boundary,
         min_timestep_boundary=args.min_timestep_boundary,
         training_scheduler_shift=args.training_scheduler_shift,
+        temporal_rope_target_num_frames=args.temporal_rope_target_num_frames,
         debug_memory=args.debug_memory,
         debug_memory_units=args.debug_memory_units,
         debug_memory_tensors_topk=args.debug_memory_tensors_topk,
