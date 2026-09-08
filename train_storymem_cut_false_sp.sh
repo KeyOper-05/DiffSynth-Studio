@@ -7,9 +7,6 @@ set +a
 
 cd "$(dirname "$0")"
 
-export DATASET_BASE="/home/ma-user/modelarts/user-job-dir/lhk_data/A_TrainingSamples/s1_storymem_dataset"
-export LORA_BASE="/home/ma-user/modelarts/user-job-dir/lhk_data/A_TrainingSamples/s2_diffsynth_loras"
-
 ACTION_NAME="${1:-}"
 
 if [ -z "$ACTION_NAME" ]; then
@@ -18,7 +15,7 @@ if [ -z "$ACTION_NAME" ]; then
   exit 1
 fi
 
-if [ ! -f "${DATASET_BASE}/${ACTION_NAME}/metadata.csv" ]; then
+if [ ! -f "data/${ACTION_NAME}/metadata.csv" ]; then
   echo "Missing training metadata: data/${ACTION_NAME}/metadata.csv"
   exit 1
 fi
@@ -26,4 +23,4 @@ fi
 echo "Starting StoryMem cut=False training: ${ACTION_NAME}"
 echo "W&B project: ${WANDB_PROJECT:-StoryMem-LoRA}"
 
-bash examples/wanvideo/model_training/lora/StoryMem-Wan2.2-MI2V-cut-false-A14B.sh "${ACTION_NAME}"
+bash examples/wanvideo/model_training/lora/StoryMem-Wan2.2-MI2V-cut-false-A14B.sh "$ACTION_NAME"
