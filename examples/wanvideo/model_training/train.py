@@ -353,6 +353,7 @@ def wan_parser():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
     parser = add_general_config(parser)
     parser = add_video_size_config(parser)
+    parser.add_argument("--seed", type=int, default=0, help="Training random seed.")
     parser.add_argument("--tokenizer_path", type=str, default=None, help="Path to tokenizer.")
     parser.add_argument("--audio_processor_path", type=str, default=None, help="Path to the audio processor. If provided, the processor will be used for Wan2.2-S2V model.")
     parser.add_argument("--max_timestep_boundary", type=float, default=1.0, help="Max timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
@@ -385,6 +386,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         kwargs_handlers=[accelerate.DistributedDataParallelKwargs(find_unused_parameters=args.find_unused_parameters)],
     )
+    accelerate.utils.set_seed(args.seed, device_specific=True)
     _debug_checkpoint(args.debug_checkpoints, "accelerator:init:done", script_start, accelerator.device)
     data_file_keys = [key for key in args.data_file_keys.split(",") if key]
     extra_inputs = [] if args.extra_inputs is None else [key for key in args.extra_inputs.split(",") if key]
