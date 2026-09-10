@@ -4,6 +4,8 @@ set -euo pipefail
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export CPU_AFFINITY_CONF=1
 
+source /home/ma-user/modelarts/user-job-dir/lhk_data/Experiment/env.sh
+
 if [ -z "$1" ]; then
   echo "Usage: bash $0 <action_name>"
   exit 1
@@ -23,15 +25,15 @@ WANDB_NAME="${ACTION_NAME}-mi2v-high-noise" accelerate launch --config_file exam
   --width 832 \
   --num_frames 49 \
   --temporal_rope_target_num_frames "${TEMPORAL_ROPE_TARGET_NUM_FRAMES}" \
-  --dataset_repeat 300 \
+  --dataset_repeat ${DATASET_REPEAT} \
   --model_paths "[[\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/high_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"],\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\",\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"]" \
-  --learning_rate 1e-4 \
-  --num_epochs 5 \
+  --learning_rate ${HIGH_NOISE_LR} \
+  --num_epochs ${HIGH_NOISE_EPOCHS} \
   --remove_prefix_in_ckpt "pipe.dit." \
   --output_path "${LORA_BASE}/${ACTION_NAME}/${ACTION_NAME}_mi2v_cut_false_high_noise_lora" \
   --lora_base_model "dit" \
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
-  --lora_rank 128 \
+  --lora_rank ${HIGH_NOISE_LORA_RANK} \
   --extra_inputs "memory_images,input_image" \
   --training_scheduler_shift "${TRAINING_SCHEDULER_SHIFT}" \
   --max_timestep_boundary "${TIMESTEP_BOUNDARY}" \
@@ -51,15 +53,15 @@ WANDB_NAME="${ACTION_NAME}-mi2v-low-noise" accelerate launch --config_file examp
   --width 832 \
   --num_frames 49 \
   --temporal_rope_target_num_frames "${TEMPORAL_ROPE_TARGET_NUM_FRAMES}" \
-  --dataset_repeat 300 \
+  --dataset_repeat ${DATASET_REPEAT} \
   --model_paths "[[\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00001-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00002-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00003-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00004-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00005-of-00006.safetensors\",\"./models/storymem_prefused/Wan2.2-MI2V-A14B/low_noise_model/diffusion_pytorch_model-00006-of-00006.safetensors\"],\"../Wan2.2_Pretrained/i2v/models_t5_umt5-xxl-enc-bf16.pth\",\"../Wan2.2_Pretrained/i2v/Wan2.1_VAE.pth\"]" \
-  --learning_rate 1e-4 \
-  --num_epochs 5 \
+  --learning_rate ${LOW_NOISE_LR} \
+  --num_epochs ${LOW_NOISE_EPOCHS} \
   --remove_prefix_in_ckpt "pipe.dit." \
   --output_path "${LORA_BASE}/${ACTION_NAME}/${ACTION_NAME}_mi2v_cut_false_low_noise_lora" \
   --lora_base_model "dit" \
   --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
-  --lora_rank 128 \
+  --lora_rank ${LOW_NOISE_LORA_RANK} \
   --extra_inputs "memory_images,input_image" \
   --training_scheduler_shift "${TRAINING_SCHEDULER_SHIFT}" \
   --max_timestep_boundary 1 \
